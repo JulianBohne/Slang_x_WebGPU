@@ -13,6 +13,9 @@ if (!adapter) fail();
 
 const device = await adapter!.requestDevice();
 
+console.log(adapter);
+console.log(device);
+
 const shaderCode = await fetch('/wgsl/compiled-test-compute.wgsl').then(res => res.text());
 
 const module = device.createShaderModule({
