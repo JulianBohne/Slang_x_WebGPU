@@ -17,16 +17,20 @@ import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from "./matrix.js"
 
   const result = a.mult(b);
 
+  result.backwards();
+
   ZeroGrad();
 
+  result.backwards();
   result.backwards();
 
   EndPass();
 
-  const bGrad = b.grads().loadFromGPU();
+  const aGrad = a.grads().loadFromGPU();
 
   Submit();
 
-  console.log(await bGrad);
+
+  console.log(await aGrad);
 
 })();
