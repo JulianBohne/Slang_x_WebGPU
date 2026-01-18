@@ -6,6 +6,7 @@ var pass: GPUComputePassEncoder | undefined = undefined;
 var resolveSubmit: () => void = () => {};
 var submitted: Promise<void> | undefined = undefined;
 
+var gradientBuffers: GPUBuffer[] = [];
 
 export async function Init(): Promise<boolean> {
   if (!('gpu' in navigator)) return false;
@@ -50,6 +51,14 @@ export function Submit() {
   resolveSubmit();
 }
 
+export function ZeroGrad() {
+  // TODO: Do this with a kernel
+  for (const gradBuf of gradientBuffers) {
+    const buf = new ArrayBuffer(gradBuf.size);
+    device!.queue.writeBuffer(gradBuf, 0, buf);
+  }
+}
+
 export class Matrix {
 
   shape: [number, number];
@@ -61,10 +70,11 @@ export class Matrix {
 
   requires_grad: boolean;
 
-  backwards: () => void;
+  backwardsFunction: () => void;
 
   constructor(other: Matrix);
   constructor(shape: [number, number], requires_grad: boolean)
+
   constructor(arg: [number, number] | Matrix, requires_grad?: boolean) {
     if (arg instanceof Array) {
       const shape = arg;
@@ -86,9 +96,10 @@ export class Matrix {
           size: 4 * rows * cols,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
         });
+        gradientBuffers.push(this.gradBuffer);
       }
 
-      this.backwards = () => {};
+      this.backwardsFunction = () => {};
 
       this.readBuffer = undefined;
     } else {
@@ -99,8 +110,18 @@ export class Matrix {
       this.gradBuffer = other.gradBuffer;
       this.readBuffer = other.readBuffer;
       this.requires_grad = other.requires_grad;
-      this.backwards = other.backwards;
+      this.backwardsFunction = other.backwardsFunction;
     }
+  }
+
+  backwards() {
+    if (!this.requires_grad) throw new TypeError('Can\'t call backward on a matrix without requires_grad');
+
+    // TODO: Do this with a kernel?
+    const floatBuffer = new Float32Array(this.shape[0] * this.shape[1]).fill(1);
+    device!.queue.writeBuffer(this.gradBuffer!, 0, floatBuffer);
+
+    this.backwardsFunction();
   }
 
   transpose() {
@@ -111,7 +132,7 @@ export class Matrix {
   }
 
   grads() {
-    if (!this.requires_grad) throw new TypeError('Can\'t convert matrix that doesn\'t requier_grad to gradient target');
+    if (!this.requires_grad) throw new TypeError('Can\'t convert matrix that doesn\'t requiers_grad to gradient target');
     const result = new Matrix(this);
     const tmp = result.gradBuffer!;
     result.gradBuffer = result.buffer;
@@ -119,7 +140,7 @@ export class Matrix {
     return result;
   }
 
-  private static createMultBindGroup(lhs: Matrix, rhs: Matrix, result: Matrix) {
+  private static createMultBindGroup(lhs: Matrix, rhs: Matrix, result: Matrix, direction: 'forwards' | 'backwards') {
     // https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
     const metaDataBuffer = new ArrayBuffer(32);
     const lhsStride      = new Uint32Array(metaDataBuffer,  0, 2);
@@ -141,7 +162,7 @@ export class Matrix {
 
     const bindGroup = device!.createBindGroup({
       label: 'Matmul Bind Group',
-      layout: Matrix.matmul!.getBindGroupLayout(0),
+      layout: direction === 'backwards' ? Matrix.backwards!.getBindGroupLayout(0) : Matrix.forwards!.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: lhs.buffer },
         { binding: 1, resource: rhs.buffer },
@@ -161,24 +182,24 @@ export class Matrix {
 
     const result = new Matrix([this.shape[0], other.shape[1]], this.requires_grad || other.requires_grad);
 
-    pass!.setBindGroup(0, Matrix.createMultBindGroup(this, other, result));
-    pass!.setPipeline(Matrix.matmul!);
+    pass!.setBindGroup(0, Matrix.createMultBindGroup(this, other, result, 'forwards'));
+    pass!.setPipeline(Matrix.forwards!);
     pass!.dispatchWorkgroups(result.shape[0], result.shape[1]);
 
     if (result.requires_grad) {
-      result.backwards = () => {
+      result.backwardsFunction = () => {
         const resultGrads = result.grads();
         if (this.requires_grad) {
-          pass!.setBindGroup(0, Matrix.createMultBindGroup(resultGrads, other.transpose(), this.grads()));
-          pass!.setPipeline(Matrix.matmul!);
+          pass!.setBindGroup(0, Matrix.createMultBindGroup(resultGrads, other.transpose(), this.grads(), 'backwards'));
+          pass!.setPipeline(Matrix.backwards!);
           pass!.dispatchWorkgroups(this.shape[0], this.shape[1]);
-          this.backwards();
+          this.backwardsFunction();
         }
         if (other.requires_grad) {
-          pass!.setBindGroup(0, Matrix.createMultBindGroup(this.transpose(), resultGrads, other.grads()));
-          pass!.setPipeline(Matrix.matmul!);
+          pass!.setBindGroup(0, Matrix.createMultBindGroup(this.transpose(), resultGrads, other.grads(), 'backwards'));
+          pass!.setPipeline(Matrix.backwards!);
           pass!.dispatchWorkgroups(other.shape[0], other.shape[1]);
-          other.backwards();
+          other.backwardsFunction();
         }
       }
     }
@@ -231,24 +252,8 @@ export class Matrix {
     return mat;
   }
 
-  setGrads(values: number[][]) {
-    const rows = values.length;
-    const cols = values[0].length;
-    if (!this.requires_grad) throw new TypeError('Can\'t set grads of matrix that doesn\'t requier_grad');
-    if (rows !== this.shape[0] || cols !== this.shape[1]) throw new TypeError('Row and/or column mismatch when setting grads');
-
-    const floatBuffer = new Float32Array(rows * cols);
-
-    for (let row = 0; row < rows; ++row) {
-      for (let col = 0; col < cols; ++col) {
-        floatBuffer[row * cols + col] = values[row][col];
-      }
-    }
-
-    device!.queue.writeBuffer(this.gradBuffer!, 0, floatBuffer);
-  }
-
-  private static matmul: GPUComputePipeline | undefined = undefined;
+  private static forwards: GPUComputePipeline | undefined = undefined;
+  private static backwards: GPUComputePipeline | undefined = undefined;
 
   static async Init(): Promise<boolean> {
     const code = await fetch('/wgsl/compiled-matmul.wgsl').then(res => res.text());
@@ -257,15 +262,25 @@ export class Matrix {
       code,
     });
 
-    const matmulPipeline = await device!.createComputePipelineAsync({
-      label: 'Matrix Multiplication Pipeline',
+    const forwardsPipeline = await device!.createComputePipelineAsync({
+      label: 'Matrix Multiplication Forwards Pipeline',
       layout: 'auto',
       compute: {
         module: matmulModule,
+        entryPoint: 'forwards',
       },
     });
+    Matrix.forwards = forwardsPipeline;
 
-    Matrix.matmul = matmulPipeline;
+    const backwardsPipeline = await device!.createComputePipelineAsync({
+      label: 'Matrix Multiplication Backwards Pipeline',
+      layout: 'auto',
+      compute: {
+        module: matmulModule,
+        entryPoint: 'backwards',
+      },
+    });
+    Matrix.backwards = backwardsPipeline;
     return true;
   }
 

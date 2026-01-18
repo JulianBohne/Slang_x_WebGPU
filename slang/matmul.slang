@@ -24,11 +24,22 @@ uint index(uint2 baseIndex, uint2 stride) {
 
 [shader("compute")]
 [numthreads(1,1,1)] // TODO: Make this work with threads ^^
-void matmul(uint3 threadId : SV_DispatchThreadID) {
+void forwards(uint3 threadId : SV_DispatchThreadID) {
     uint2 i2 = threadId.xy;
     float sum = 0;
     for (uint i = 0; i < c.innerDim; ++i) {
         sum += lhs[index(uint2(i2.x, i), c.lhsStride)] * rhs[index(uint2(i, i2.y), c.rhsStride)];
     }
     result[index(i2, c.resultStride)] = sum;
+}
+
+[shader("compute")]
+[numthreads(1,1,1)] // TODO: Make this work with threads ^^
+void backwards(uint3 threadId : SV_DispatchThreadID) {
+    uint2 i2 = threadId.xy;
+    float sum = 0;
+    for (uint i = 0; i < c.innerDim; ++i) {
+        sum += lhs[index(uint2(i2.x, i), c.lhsStride)] * rhs[index(uint2(i, i2.y), c.rhsStride)];
+    }
+    result[index(i2, c.resultStride)] += sum; // Adding on the backward pass
 }

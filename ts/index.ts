@@ -1,4 +1,4 @@
-import { Init, BeginPass, EndPass, Submit, Matrix } from "./matrix.js";
+import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from "./matrix.js";
 
 (async () => {
   if (!await Init()) {
@@ -8,19 +8,25 @@ import { Init, BeginPass, EndPass, Submit, Matrix } from "./matrix.js";
 
   const a = Matrix.fromArray([
     [ 1, 2, 3 ],
+    [ 4, 5, 6 ],
   ]);
 
-  const b = Matrix.fromArray([[7], [8], [9]]);
+  const b = Matrix.fromArray([[7, 8, 9]]).transpose();
 
   BeginPass();
 
   const result = a.mult(b);
-  result.setGrads([[1]]);
+
+  ZeroGrad();
+
   result.backwards();
 
   EndPass();
+
   const bGrad = b.grads().loadFromGPU();
+
   Submit();
+
   console.log(await bGrad);
 
 })();
