@@ -1,14 +1,30 @@
-import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from "./matrix.js";
+import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from './matrix.js';
+import { Splatter } from './renderer.js';
 
 (async () => {
-  if (!await Init()) {
+  const canvas = document.getElementById('surface') as HTMLCanvasElement;
+
+  const splatter = await Splatter.new(canvas);
+
+  const animationFunc = (time: DOMHighResTimeStamp) => {
+    splatter.render(time);
+    requestAnimationFrame(animationFunc);
+  };
+  requestAnimationFrame(animationFunc);
+
+})();
+
+(async () => {
+  const canvas = document.getElementById('surface') as HTMLCanvasElement;
+
+  if (!await Init(canvas)) {
     console.error('GPU initialization failed');
     return;
   }
 
   const a = Matrix.fromArray([
-    [ 1, 2, 3 ],
-    [ 4, 5, 6 ],
+    [1, 2, 3],
+    [4, 5, 6],
   ]);
 
   const b = Matrix.fromArray([[7, 8, 9]]).transpose();
@@ -33,4 +49,4 @@ import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from "./matrix.js"
 
   console.log(await aGrad);
 
-})();
+});

@@ -8,7 +8,7 @@ var submitted: Promise<void> | undefined = undefined;
 
 var gradientMatrices: Matrix[] = [];
 
-export async function Init(): Promise<boolean> {
+export async function Init(canvas: HTMLCanvasElement): Promise<boolean> {
   if (!('gpu' in navigator)) return false;
 
   const adapter = await navigator.gpu.requestAdapter({
@@ -23,7 +23,14 @@ export async function Init(): Promise<boolean> {
 
   device = await adapter!.requestDevice();
 
-  encoder = device.createCommandEncoder({ label: 'Compute Command Encoder' });
+  const context = canvas.getContext('webgpu')!;
+  const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({
+    device,
+    format: presentationFormat,
+  });
+
+  encoder = device.createCommandEncoder({ label: 'Global Command Encoder' });
 
   console.log(adapter);
   console.log(device);
