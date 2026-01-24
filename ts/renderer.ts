@@ -6,13 +6,14 @@ export class Splatter {
 
     const vertex_shader_source_promise = fetch('/wgsl/compiled-splat-vertex.wgsl').then(res => res.text());
     const fragment_shader_source_promise = fetch('/wgsl/compiled-splat-fragment.wgsl').then(res => res.text());
+    const render_shader_source_promise = fetch('/wgsl/compiled-splat-render.wgsl').then(res => res.text());
 
     const adapter = await navigator.gpu.requestAdapter({ featureLevel: 'core' });
     if (!adapter) throw new Error('WebGPU not supported');
 
     const device = await adapter!.requestDevice();
 
-    const shader_sources = await Promise.all([vertex_shader_source_promise, fragment_shader_source_promise]);
+    const shader_sources = await Promise.all([vertex_shader_source_promise, fragment_shader_source_promise, render_shader_source_promise]);
 
     return new Splatter(target_canvas, device, shader_sources)
   }
@@ -24,10 +25,10 @@ export class Splatter {
 
     this.device.queue.writeBuffer(this.uniform_buffer, 0, new Float32Array([this.canvas.width / this.canvas.height, (current_time - this.start_time) / 1000]));
 
-    pass.setPipeline(this.pipeline);
+    pass.setPipeline(this.presentation_pipeline);
 
     pass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.pipeline.getBindGroupLayout(0),
+      layout: this.presentation_pipeline.getBindGroupLayout(0),
       entries: [
         {
           binding: 0,
@@ -35,7 +36,7 @@ export class Splatter {
         }
       ],
     }));
-    pass.draw(6);
+    pass.draw(6); // Full screen quad
     pass.end();
 
     const command_buffer = encoder.finish();
@@ -44,7 +45,9 @@ export class Splatter {
 
   canvas: HTMLCanvasElement;
   device: GPUDevice;
-  pipeline: GPURenderPipeline;
+  render_pipeline: GPUComputePipeline;
+  presentation_pipeline: GPURenderPipeline;
+  render_texture: GPUTexture;
   next_render_pass_descriptor: () => GPURenderPassDescriptor;
   start_time: number | undefined;
   uniform_buffer: GPUBuffer;
@@ -52,7 +55,7 @@ export class Splatter {
   private constructor(
     target_canvas: HTMLCanvasElement,
     device: GPUDevice,
-    [vertex_shader_source, fragment_shader_source]: [string, string],
+    [vertex_shader_source, fragment_shader_source, render_shader_source]: [string, string, string],
   ) {
     this.canvas = target_canvas;
     this.device = device;
@@ -70,14 +73,27 @@ export class Splatter {
     const module_vertex = device.createShaderModule({
       label: 'Vertex Splatting Presentation Module',
       code: vertex_shader_source,
-    })
+    });
 
     const module_fragment = device.createShaderModule({
       label: 'Fragment Splatting Presentation Module',
       code: fragment_shader_source,
-    })
+    });
 
-    this.pipeline = device.createRenderPipeline({
+    const module_render = device.createShaderModule({
+      label: 'Compute Splatting Module',
+      code: render_shader_source,
+    });
+
+    this.render_pipeline = device.createComputePipeline({
+      label: 'Compute Splatting Pipeline',
+      layout: 'auto',
+      compute: {
+        module: module_render,
+      },
+    });
+
+    this.presentation_pipeline = device.createRenderPipeline({
       label: 'Splatting Presentation Pipeline',
       layout: 'auto',
       vertex: {
@@ -87,6 +103,12 @@ export class Splatter {
         module: module_fragment,
         targets: [{ format: presentation_format }],
       }
+    });
+
+    this.render_texture = device.createTexture({
+      format: 'rgba8unorm',
+      size: [ 800, 600 ],
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING, // We will render into this texture and then display it in the fragment shader :)
     });
 
     const render_pass_descriptor = {

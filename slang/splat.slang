@@ -1,5 +1,104 @@
 import gaussian;
 
+static const uint SENTINAL = -1; // 0xffffffff;
+static const uint MAX_GAUSSIANS_PER_TILE = 256;
+static const uint TILE_SIZE = 16;
+
+[[vk::binding(0, 1)]]
+ConstantBuffer<SplatCamera> camera;
+
+[[vk::binding(1, 1)]]
+RWStructuredBuffer<Gaussian3D> gaussians_3d;
+
+[[vk::binding(2, 1)]]
+RWStructuredBuffer<Gaussian2D> gaussians_2d;
+
+[[vk::binding(3, 1)]]
+RWTexture2D output;
+
+// // WGSL doen't really support atomics for much, so we gotta bitcast to uints :D
+// [[vk::binding(2, 1)]]
+// RWStructuredBuffer<Atomic<uint>> grad_buffer;
+
+// One workgroup is one tile
+
+// Number of gaussians in this tile
+groupshared Atomic<uint> atomic_num_gaussians_in_tile;
+groupshared uint num_gaussians_in_tile;
+
+groupshared uint gaussians[MAX_GAUSSIANS_PER_TILE];
+
+void transform_gaussian(uint thread_index, uint num_threads, uint num_gaussians) {
+    for (uint i = thread_index; i < num_gaussians; i += num_threads) {
+        gaussians_2d[i] = gaussians_3d[i].transform(camera);
+    }
+}
+
+void collect_gaussians_in_tile(uint num_gaussians, uint3 groupThreadId, uint3 groupId) {
+    GroupMemoryBarrierWithGroupSync();
+    if (groupThreadId.x == 0) {
+        atomic_num_gaussians_in_tile = 0;
+    }
+    GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
+
+    // TODO: Check if gaussian is in Tile
+    // Currently we're just saying YES, for future reference, this is where we do wacky transformations with the axes :)
+    for (uint j = 0; j < num_gaussians; j += MAX_GAUSSIANS_PER_TILE /* work group size */) {
+        uint index = atomic_num_gaussians_in_tile++;
+        if (index >= MAX_GAUSSIANS_PER_TILE) break;
+        gaussians[index] = j;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (groupThreadId.x == 0) {
+        num_gaussians_in_tile = min(atomic_num_gaussians_in_tile.load(), MAX_GAUSSIANS_PER_TILE);
+    }
+    GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
+}
+
+[shader("compute")]
+[NumThreads(TILE_SIZE, TILE_SIZE, 1)]
+void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupThreadID, uint3 groupId: SV_GroupID) {
+    uint output_width;
+    uint output_height;
+    output.GetDimensions(output_width, output_height);
+
+    uint num_total_gaussians, gaussian_size;
+    gaussians_3d.GetDimensions(num_total_gaussians, gaussian_size);
+
+    uint tiles_count_x = ((output_width - 1) / TILE_SIZE) + 1;
+    uint tiles_count_y = ((output_width - 1) / TILE_SIZE) + 1;
+
+    uint global_thread_id = threadId.x + threadId.y * (tiles_count_x * TILE_SIZE);
+    uint num_threads = TILE_SIZE * TILE_SIZE * tiles_count_x * tiles_count_y;
+
+    // NOTE: For now I will do the transformation here, but this couples the number of dispatched threads for transforming the gaussians to the resolution of the render, which is dumb lol
+    transform_gaussian(global_thread_id, num_threads, num_total_gaussians);
+
+    collect_gaussians_in_tile(num_total_gaussians, groupThreadId, groupId);
+    
+    // TODO: Sort gaussians (we're just not gonna do that now)
+
+    if (!all(threadId.xy < uint2(output_width, output_height))) {
+        return; // Outside of range
+    }
+
+    float2 pixel_ndc = 2 * (float2(threadId.xy) / float2(output_width, output_height)) - 1;
+
+    float opacity = 0.0;
+    float3 color = float3(0);
+    [MaxIters(MAX_GAUSSIANS_PER_TILE)]
+    for (uint i = 0; i < num_gaussians_in_tile; ++i) {
+        uint index = gaussians[i];
+        float density = gaussianPDF(pixel_ndc, gaussians_2d[index].position, gaussians_2d[index].inv_cov);
+        float t = (1 - opacity) * gaussians_2d[index].alpha * density;
+        color = lerp(color, gaussians_2d[index].color, t);
+        opacity = lerp(opacity, 1, t);
+        if (opacity > 0.99) break;
+    }
+
+    output.Store(threadId.xy, float4(color, opacity));
+}
+
 uniform float w7h;
 uniform float time;
 
@@ -26,6 +125,12 @@ static const float2[] uvs = {
     float2(0., 1.), // bottom left
 };
 
+[vk::binding(0, 0)]
+Texture2D tex;
+
+[vk::binding(1, 0)]
+SamplerState sampler_state;
+
 [shader("vertex")]
 VOut vert(uint vertexIndex : SV_VertexID) {
     return VOut(
@@ -36,13 +141,7 @@ VOut vert(uint vertexIndex : SV_VertexID) {
 
 [shader("fragment")]
 float4 frag(VOut input) : SV_Target {
-    float2 uv = (input.uv - float2(0, 0.5)) / float2(1, w7h) + float2(0, 0.5);
-    float c = cos(time);
-    float s = sin(time);
-    float2x2 rot = float2x2(c, -s, s, c);
-    float2x2 scale = float2x2(10, 0, 0, 40);
-    float2x2 oneSided = mul(scale, transpose(rot));
-    float2x2 inv_cov = mul(transpose(oneSided), oneSided);
-    return float4(float3(gaussianPDF(uv, float2(0.5,0.5), inv_cov)), 1.0);
+    // float2 uv = (input.uv - float2(0, 0.5)) / float2(1, w7h) + float2(0, 0.5);
+    return tex.Sample(sampler_state, input.uv);
     // return float4(input.uv * (sin(time) * 0.5 + 0.5), 0.0, 1.0);
 }
