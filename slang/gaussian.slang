@@ -5,9 +5,21 @@ public float gaussianPDF(float2 coord, float2 mew, float2x2 invCov) {
     return exp(-0.5 * dot((coord - mew), mul(invCov, coord - mew)));
 }
 
+// [Differentiable]
+// public float4 project_nodiff_point(float4x4 mat, no_diff float4 point) {
+//     float4 multiplied = mul(mat, point);
+//     return multiplied / multiplied.w;
+// }
+
+// public float3x3 jacobian(float4x4 mat, float4 at) {
+//     DifferentialPair<float4x4> matPair = DifferentialPair<float4x4>(mat, float4x4(0));
+//     bwd_diff(project_nodiff_point)(matPair, at, float4(1));
+//     return float3x3(matPair.d);
+// }
+
 public struct SplatCamera {
-    float4x4 mv;
-    float4x4 projection;
+    public float4x4 mv;
+    public float4x4 projection;
 //    float4x4 mvp;
 
     [Differentiable]
@@ -18,11 +30,11 @@ public struct SplatCamera {
         float b = projection[1][1];
         float d = projection[3][2];
 
-        return transpose(float3x3(
+        return float3x3(
             -a/at.z,       0, (a * at.x) / (at.z * at.z),
                   0, -b/at.z, (b * at.y) / (at.z * at.z),
                   0,       0,          d / (at.z * at.z),
-        ));
+        );
     }
 
 }
@@ -74,15 +86,15 @@ float2x2 inverse(float2x2 mat) {
 }
 
 public struct Gaussian3D : IDifferentiable {
-    float3 position;
-    float4 rotation;
-    float3 scale;
-    float3 color;
-    float alpha;
+    public float3 position;
+    public float4 rotation;
+    public float3 scale;
+    public float3 color;
+    public float alpha;
 
     [Differentiable]
     public Gaussian2D transform(SplatCamera cam) {
-        float4 cam_space_position = mul(cam.mv, float4(this.position, 1.0));
+        float4 cam_space_position = mul(cam.mv, float4(position, 1.0));
         float4 projected_position = mul(cam.projection, cam_space_position);
         float4 ndc_position = projected_position / projected_position.w;
 

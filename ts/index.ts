@@ -4,6 +4,7 @@ import { Splatter } from './renderer.js';
 (async () => {
   const canvas = document.getElementById('surface') as HTMLCanvasElement;
 
+  console.log('1');
   const splatter = await Splatter.new(canvas);
 
   const animationFunc = (time: DOMHighResTimeStamp) => {

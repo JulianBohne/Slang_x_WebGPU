@@ -4,17 +4,17 @@ static const uint SENTINAL = -1; // 0xffffffff;
 static const uint MAX_GAUSSIANS_PER_TILE = 256;
 static const uint TILE_SIZE = 16;
 
-[[vk::binding(0, 1)]]
+[[vk::binding(0, 0)]]
 ConstantBuffer<SplatCamera> camera;
 
-[[vk::binding(1, 1)]]
+[[vk::binding(1, 0)]]
 RWStructuredBuffer<Gaussian3D> gaussians_3d;
 
-[[vk::binding(2, 1)]]
+[[vk::binding(2, 0)]]
 RWStructuredBuffer<Gaussian2D> gaussians_2d;
 
-[[vk::binding(3, 1)]]
-RWTexture2D output;
+[[vk::binding(3, 0)]]
+WTexture2D output;
 
 // // WGSL doen't really support atomics for much, so we gotta bitcast to uints :D
 // [[vk::binding(2, 1)]]
@@ -28,7 +28,7 @@ groupshared uint num_gaussians_in_tile;
 
 groupshared uint gaussians[MAX_GAUSSIANS_PER_TILE];
 
-void transform_gaussian(uint thread_index, uint num_threads, uint num_gaussians) {
+void transform_gaussians(uint thread_index, uint num_threads, uint num_gaussians) {
     for (uint i = thread_index; i < num_gaussians; i += num_threads) {
         gaussians_2d[i] = gaussians_3d[i].transform(camera);
     }
@@ -72,7 +72,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     uint num_threads = TILE_SIZE * TILE_SIZE * tiles_count_x * tiles_count_y;
 
     // NOTE: For now I will do the transformation here, but this couples the number of dispatched threads for transforming the gaussians to the resolution of the render, which is dumb lol
-    transform_gaussian(global_thread_id, num_threads, num_total_gaussians);
+    transform_gaussians(global_thread_id, num_threads, num_total_gaussians);
 
     collect_gaussians_in_tile(num_total_gaussians, groupThreadId, groupId);
     
@@ -93,10 +93,12 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
         float t = (1 - opacity) * gaussians_2d[index].alpha * density;
         color = lerp(color, gaussians_2d[index].color, t);
         opacity = lerp(opacity, 1, t);
+        // color = float3(gaussians_2d[index].inv_cov[0][0]);
         if (opacity > 0.99) break;
     }
 
-    output.Store(threadId.xy, float4(color, opacity));
+    // output.Store(threadId.xy, float4(float3(gaussians_2d[0].inv_cov[0][0]), 1));
+    output.Store(threadId.xy, float4(color, 1));
 }
 
 uniform float w7h;
@@ -128,8 +130,8 @@ static const float2[] uvs = {
 [vk::binding(0, 0)]
 Texture2D tex;
 
-[vk::binding(1, 0)]
-SamplerState sampler_state;
+// [vk::binding(1, 0)]
+// SamplerState sampler_state;
 
 [shader("vertex")]
 VOut vert(uint vertexIndex : SV_VertexID) {
@@ -142,6 +144,8 @@ VOut vert(uint vertexIndex : SV_VertexID) {
 [shader("fragment")]
 float4 frag(VOut input) : SV_Target {
     // float2 uv = (input.uv - float2(0, 0.5)) / float2(1, w7h) + float2(0, 0.5);
-    return tex.Sample(sampler_state, input.uv);
+    uint width, height;
+    tex.GetDimensions(width, height);
+    return tex.Load(uint3(uint(input.uv.x * (width-1)), uint(input.uv.y * (height-1)), 0));
     // return float4(input.uv * (sin(time) * 0.5 + 0.5), 0.0, 1.0);
 }
