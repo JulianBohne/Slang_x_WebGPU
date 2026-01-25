@@ -36,21 +36,21 @@ void transform_gaussians(uint thread_index, uint num_threads, uint num_gaussians
 
 void collect_gaussians_in_tile(uint num_gaussians, uint3 groupThreadId, uint3 groupId) {
     GroupMemoryBarrierWithGroupSync();
-    if (groupThreadId.x == 0) {
+    if (groupThreadId.x == 0 && groupThreadId.y == 0) {
         atomic_num_gaussians_in_tile = 0;
     }
     GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
 
     // TODO: Check if gaussian is in Tile
     // Currently we're just saying YES, for future reference, this is where we do wacky transformations with the axes :)
-    for (uint j = 0; j < num_gaussians; j += MAX_GAUSSIANS_PER_TILE /* work group size */) {
+    for (uint j = groupThreadId.x + groupThreadId.y * TILE_SIZE; j < num_gaussians; j += MAX_GAUSSIANS_PER_TILE /* work group size */) {
         uint index = atomic_num_gaussians_in_tile++;
         if (index >= MAX_GAUSSIANS_PER_TILE) break;
         gaussians[index] = j;
     }
     GroupMemoryBarrierWithGroupSync();
     if (groupThreadId.x == 0) {
-        num_gaussians_in_tile = min(atomic_num_gaussians_in_tile.load(), MAX_GAUSSIANS_PER_TILE);
+        num_gaussians_in_tile = min(min(atomic_num_gaussians_in_tile.load(), MAX_GAUSSIANS_PER_TILE), num_gaussians);
     }
     GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
 }
@@ -93,7 +93,6 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
         float t = (1 - opacity) * gaussians_2d[index].alpha * density;
         color = lerp(color, gaussians_2d[index].color, t);
         opacity = lerp(opacity, 1, t);
-        // color = float3(gaussians_2d[index].inv_cov[0][0]);
         if (opacity > 0.99) break;
     }
 

@@ -42,6 +42,13 @@ class SplatCamera {
   }
 }
 
+function angleAxisToQuat([x, y, z]: [number, number, number]) {
+  const angle = Math.sqrt(x * x + y * y + z * z);
+  const s = Math.sin(angle);
+  const c = Math.cos(angle);
+  return [s*x/angle, s*y/angle, s*z/angle, c];
+}
+
 class Gaussian3D {
   // float3 position;
   static position_offset = 0;
@@ -70,10 +77,10 @@ class Gaussian3D {
     const color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
     const alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
 
-    position_buffer.set([0, 0, 0]);
-    rotation_buffer.set([0, 0, 0, 1]); // Unit quaternion
-    scale_buffer.set([1, 0.1, 1]); // Uniform scale
-    color_buffer.set([1, 1, 0]); // Yellow :)
+    position_buffer.set([Math.random(), Math.random(), Math.random()]);
+    rotation_buffer.set(angleAxisToQuat([Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]));
+    scale_buffer.set([Math.random(), Math.random(), Math.random()]);
+    color_buffer.set([Math.random(), Math.random(), Math.random()]);
     alpha_buffer.set([1]); // Full opacity
   }
 }
@@ -232,10 +239,11 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    const num_gaussians = 1;
+    const num_gaussians = 2;
 
     const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * num_gaussians);
     new Gaussian3D(cpu_splat_buffer, 0);
+    new Gaussian3D(cpu_splat_buffer, 1);
 
     console.log(Gaussian3D.size * num_gaussians);
     this.splat_buffer_3D = device.createBuffer({
