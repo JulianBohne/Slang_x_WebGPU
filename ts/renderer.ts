@@ -1,44 +1,71 @@
 
+const float_size = 4;
+const mat4_size = 4*4 * float_size;
+
 class SplatCamera {
+
+  static size = mat4_size /* Model View */ + mat4_size /* Projection */;
+
   buffer: GPUBuffer;
+
+  device: GPUDevice;
+
+  fov: number;
+  aspect_ratio: number;
+  far: number;
+  near: number;
+
+  x: number;
+  y: number;
+  z: number;
+
   constructor(device: GPUDevice) {
+    this.buffer = device.createBuffer({
+      label: 'SplatCamera Constant Buffer',
+      size: SplatCamera.size,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM,
+    });
 
-    const float_size = 4;
-    const mat4_size = 4*4 * float_size;
-    const splat_cam_size = mat4_size /* Model View */ + mat4_size /* Projection */;
+    this.device = device;
 
-    const cb = new Float32Array(new ArrayBuffer(splat_cam_size));
+    this.fov = Math.PI / 2; // 90 degrees
+    this.aspect_ratio = 1; // 1 : 1
+    this.far = 1000;
+    this.near = 1;
+
+    this.x =  0;
+    this.y =  0;
+    this.z = -5;
+
+    this.to_gpu();
+  }
+
+  to_gpu() {
+    const cb = new Float32Array(new ArrayBuffer(SplatCamera.size));
 
     // Model View Matrix (Note the matrix has to be written transposed here)
     cb.set([
       1, 0,  0, 0,
       0, 1,  0, 0,
       0, 0,  1, 0,
-      0, 0, -5, 1,
+      -this.x, -this.y, -this.z, 1,
     ]);
-
-    const fov = Math.PI / 2; // 90 degrees
-    const aspect_ratio = 1; // 1 : 1
-    const far = 1000;
-    const near = 1;
     
-    const tf = Math.tan(fov / 2);
+    const tf = Math.tan(this.fov / 2);
 
-    // Projection
+    const a = this.aspect_ratio;
+    const f = this.far;
+    const n = this.near;
+
+    // Projection Looking in +z -> NDC [-1,1][-1,1][0,1] (Note the matrix has to be written transposed here)
     cb.set([
-      1 / (aspect_ratio * tf),      0,                  0, 0,
-                            0, 1 / tf,                  0, 0,
-                            0,      0, far / (far - near), -near * far / (far - near),
-                            0,      0,                  1, 0,
+      1 / (a * tf),      0,                  0, 0,
+                 0, 1 / tf,                  0, 0,
+                 0,      0,        f / (f - n), 1,
+                 0,      0, -(f * n) / (f - n), 0,
     ], 4*4);
-
-    console.log(splat_cam_size);
-    this.buffer = device.createBuffer({
-      label: 'SplatCamera Constant Buffer',
-      size: splat_cam_size,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM,
-    });
-    device.queue.writeBuffer(this.buffer, 0, cb); // Write camera to GPU
+    
+    this.device.queue.writeBuffer(this.buffer, 0, cb); // Write camera to GPU
   }
 }
 
@@ -77,7 +104,7 @@ class Gaussian3D {
     const color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
     const alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
 
-    position_buffer.set([Math.random(), Math.random(), Math.random()]);
+    position_buffer.set([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
     rotation_buffer.set(angleAxisToQuat([Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]));
     scale_buffer.set([Math.random(), Math.random(), Math.random()]);
     color_buffer.set([Math.random(), Math.random(), Math.random()]);
@@ -107,6 +134,7 @@ export class Splatter {
   }
 
   render(current_time: DOMHighResTimeStamp) {
+    this.camera.to_gpu();
 
     const compute_encoder = this.device.createCommandEncoder({ label: 'Splatting Compute Encoder' });
     const compute_pass = compute_encoder.beginComputePass({ label: 'Compute Pass' });
@@ -186,32 +214,26 @@ export class Splatter {
     this.canvas = target_canvas;
     this.device = device;
 
-    console.log(++counter);
     const context = target_canvas.getContext('webgpu');
     if (!context) throw new Error('Could not get webgpu context of canvas');
 
-    console.log(++counter);
     const presentation_format = navigator.gpu.getPreferredCanvasFormat();
 
-    console.log(++counter);
     context.configure({
       device,
       format: presentation_format,
     });
 
-    console.log(++counter);
     const module_vertex = device.createShaderModule({
       label: 'Vertex Splatting Presentation Module',
       code: vertex_shader_source,
     });
 
-    console.log(++counter);
     const module_fragment = device.createShaderModule({
       label: 'Fragment Splatting Presentation Module',
       code: fragment_shader_source,
     });
 
-    console.log(++counter);
     const module_render = device.createShaderModule({
       label: 'Compute Splatting Module',
       code: render_shader_source,
@@ -239,13 +261,13 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    const num_gaussians = 2;
+    const num_gaussians = 10;
 
     const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * num_gaussians);
-    new Gaussian3D(cpu_splat_buffer, 0);
-    new Gaussian3D(cpu_splat_buffer, 1);
+    for (let i = 0; i < num_gaussians; ++i) {
+      new Gaussian3D(cpu_splat_buffer, i);
+    }
 
-    console.log(Gaussian3D.size * num_gaussians);
     this.splat_buffer_3D = device.createBuffer({
       label: '3D Splat Buffer',
       size: Gaussian3D.size * num_gaussians,
@@ -264,14 +286,12 @@ export class Splatter {
     // public no_diff float2 axis_b;
     const gaussian2D_size = 4 * (2 + 1 + 1 /* padding */ + 2*2 + 3 + 1 + 2 + 2);
 
-    console.log(gaussian2D_size * num_gaussians);
     this.splat_buffer_2D = device.createBuffer({
       label: '2D Transformed Splat Buffer',
       size: gaussian2D_size * num_gaussians,
       usage: GPUBufferUsage.STORAGE,
     });
 
-    console.log(800, 600);
     this.render_texture = device.createTexture({
       format: 'rgba32float',
       size: [ 800, 600 ],

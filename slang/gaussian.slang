@@ -25,15 +25,14 @@ public struct SplatCamera {
     [Differentiable]
     [NoDiffThis]
     float3x3 jacobian(float4 at) {
-        // TODO: Double chjeck this lol
-        float a = projection[0][0];
-        float b = projection[1][1];
-        float d = projection[3][2];
+        float b = projection[0][0];
+        float h = projection[1][1];
+        float o = projection[2][3];
 
         return float3x3(
-            -a/at.z,       0, (a * at.x) / (at.z * at.z),
-                  0, -b/at.z, (b * at.y) / (at.z * at.z),
-                  0,       0,          d / (at.z * at.z),
+            b/at.z,       0, -(b * at.x) / (at.z * at.z),
+                  0, h/at.z, -(h * at.y) / (at.z * at.z),
+                  0,       0,         -o / (at.z * at.z),
         );
     }
 

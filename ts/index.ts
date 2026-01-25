@@ -1,11 +1,19 @@
+import { Slider } from './gui.js';
 import { Init, BeginPass, EndPass, Submit, Matrix, ZeroGrad } from './matrix.js';
 import { Splatter } from './renderer.js';
 
 (async () => {
   const canvas = document.getElementById('surface') as HTMLCanvasElement;
+  const gui_container = document.getElementById('gui-container') as HTMLDivElement;
 
-  console.log('1');
   const splatter = await Splatter.new(canvas);
+  
+  new Slider(gui_container, splatter.camera, 'fov', 0.1, 0.9*Math.PI, () => {});
+  new Slider(gui_container, splatter.camera, 'far', 1, 100, () => {});
+  new Slider(gui_container, splatter.camera, 'near', 0.1, 10, () => {});
+  new Slider(gui_container, splatter.camera, 'x', -5, 5, () => {});
+  new Slider(gui_container, splatter.camera, 'y', -5, 5, () => {});
+  new Slider(gui_container, splatter.camera, 'z', -5, 5, () => {});
 
   const animationFunc = (time: DOMHighResTimeStamp) => {
     splatter.render(time);

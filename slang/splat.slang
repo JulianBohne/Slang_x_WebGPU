@@ -44,9 +44,11 @@ void collect_gaussians_in_tile(uint num_gaussians, uint3 groupThreadId, uint3 gr
     // TODO: Check if gaussian is in Tile
     // Currently we're just saying YES, for future reference, this is where we do wacky transformations with the axes :)
     for (uint j = groupThreadId.x + groupThreadId.y * TILE_SIZE; j < num_gaussians; j += MAX_GAUSSIANS_PER_TILE /* work group size */) {
-        uint index = atomic_num_gaussians_in_tile++;
-        if (index >= MAX_GAUSSIANS_PER_TILE) break;
-        gaussians[index] = j;
+        if (gaussians_2d[j].depth >= 0 && gaussians_2d[j].depth <= 1) {
+            uint index = atomic_num_gaussians_in_tile++;
+            if (index >= MAX_GAUSSIANS_PER_TILE) break;
+            gaussians[index] = j;
+        }
     }
     GroupMemoryBarrierWithGroupSync();
     if (groupThreadId.x == 0) {
