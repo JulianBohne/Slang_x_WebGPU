@@ -109,7 +109,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     }
 
     // output.Store(threadId.xy, float4(float3(gaussians_2d[0].inv_cov[0][0]), 1));
-    output.Store(threadId.xy, float4(color + float3(num_gaussians_in_tile) / 2, 1));
+    output.Store(threadId.xy, float4(color, 1));
 }
 
 uniform float w7h;

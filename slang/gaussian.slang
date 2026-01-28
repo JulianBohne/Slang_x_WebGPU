@@ -62,7 +62,7 @@ public struct Gaussian2D : IDifferentiable {
 
     // Intersection test between the 2D gaussian and a convex quadrilateral (TODO: CC wise?)
     public bool intersects_quad(float2 quad_points[4]) {
-        float n_sigmas = 3;
+        float n_sigmas = 2;
 
         // R * R^T = M
 
@@ -76,23 +76,31 @@ public struct Gaussian2D : IDifferentiable {
         float2x2 transformation = float2x2(inverse_axis_a, inverse_axis_b);
 
         float2 transformed_quad_points[4];
+        float2 center = float2(0, 0);
         // [unroll]
         for (int i = 0; i < 4; ++i) {
             transformed_quad_points[i] = mul(transformation, quad_points[i] - position);
+            center += transformed_quad_points[i];
         }
+        center /= 4;
+
+        if (length(center) <= 1) return true;
+
+        float2 testPoint = center / length(center);
+
         float2 normals[4];
         // [unroll]
         for (int i = 0; i < 4; ++i) {
             normals[i] = normalize(rot_90(transformed_quad_points[(i + 1) % 4] - transformed_quad_points[i]));
         }
-        bool intersects = false;
-        // bool intersects_flipped = true;
+        bool intersects = true;
+        bool intersects_flipped = true;
         // [unroll]
         for (int i = 0; i < 4; ++i) {
-            intersects |= dot(transformed_quad_points[i], transformed_quad_points[i]) < 1;
-            // intersects_flipped &= dot(transformed_quad_points[i], -normals[i]) < 1;
+            intersects &= dot(testPoint - transformed_quad_points[i], normals[i]) < 1;
+            intersects_flipped &= dot(testPoint - transformed_quad_points[i], -normals[i]) < 1;
         }
-        return intersects; //  | intersects_flipped;
+        return intersects | intersects_flipped;
     }
 }
 
