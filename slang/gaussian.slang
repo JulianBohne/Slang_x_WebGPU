@@ -5,18 +5,6 @@ public float gaussianPDF(float2 coord, float2 mew, float2x2 invCov) {
     return exp(-0.5 * dot((coord - mew), mul(invCov, coord - mew)));
 }
 
-// [Differentiable]
-// public float4 project_nodiff_point(float4x4 mat, no_diff float4 point) {
-//     float4 multiplied = mul(mat, point);
-//     return multiplied / multiplied.w;
-// }
-
-// public float3x3 jacobian(float4x4 mat, float4 at) {
-//     DifferentialPair<float4x4> matPair = DifferentialPair<float4x4>(mat, float4x4(0));
-//     bwd_diff(project_nodiff_point)(matPair, at, float4(1));
-//     return float3x3(matPair.d);
-// }
-
 public struct SplatCamera {
     public float4x4 mv;
     public float4x4 projection;
@@ -38,6 +26,30 @@ public struct SplatCamera {
 
 }
 
+float trace(float2x2 mat) {
+    return mat[0][0] + mat[1][1];
+}
+
+// https://math.stackexchange.com/questions/395698/fast-way-to-calculate-eigen-of-2x2-matrix-using-a-formula
+// https://people.math.harvard.edu/~knill/teaching/math21b2004/exhibits/2dmatrices/index.html
+float2x2 eigen(float2x2 mat) {
+
+    float d = determinant(mat); // Note: Determinant is expected to never be negative
+    float t = trace(mat);
+
+    float l1 = t / 2 + sqrt(t * t / 4 - d);
+    float l2 = t / 2 - sqrt(t * t / 4 - d);
+
+    float2 eig_1 = normalize(float2(l1 - mat[1][1], mat[1][0])) * sqrt(l1);
+    float2 eig_2 = normalize(float2(l2 - mat[1][1], mat[1][0])) * sqrt(l2);
+    return float2x2(eig_1, eig_2);
+}
+
+// Rotate vec by 90 degrees
+float2 rot_90(float2 vec) {
+    return float2(-vec.y, vec.x);
+}
+
 public struct Gaussian2D : IDifferentiable {
     public float2 position;
     public no_diff float depth;
@@ -46,8 +58,42 @@ public struct Gaussian2D : IDifferentiable {
     public float3 color;
     public float alpha;
 
-    public no_diff float2 axis_a;
-    public no_diff float2 axis_b;
+    public float2x2 cov;
+
+    // Intersection test between the 2D gaussian and a convex quadrilateral (TODO: CC wise?)
+    public bool intersects_quad(float2 quad_points[4]) {
+        float n_sigmas = 3;
+
+        // R * R^T = M
+
+        float2x2 half_cov_t = eigen(cov);
+
+        float2 axis_a = half_cov_t[0] * n_sigmas;
+        float2 axis_b = half_cov_t[1] * n_sigmas;
+
+        float2 inverse_axis_a = axis_a / dot(axis_a, axis_a);
+        float2 inverse_axis_b = axis_b / dot(axis_b, axis_b);
+        float2x2 transformation = float2x2(inverse_axis_a, inverse_axis_b);
+
+        float2 transformed_quad_points[4];
+        // [unroll]
+        for (int i = 0; i < 4; ++i) {
+            transformed_quad_points[i] = mul(transformation, quad_points[i] - position);
+        }
+        float2 normals[4];
+        // [unroll]
+        for (int i = 0; i < 4; ++i) {
+            normals[i] = normalize(rot_90(transformed_quad_points[(i + 1) % 4] - transformed_quad_points[i]));
+        }
+        bool intersects = false;
+        // bool intersects_flipped = true;
+        // [unroll]
+        for (int i = 0; i < 4; ++i) {
+            intersects |= dot(transformed_quad_points[i], transformed_quad_points[i]) < 1;
+            // intersects_flipped &= dot(transformed_quad_points[i], -normals[i]) < 1;
+        }
+        return intersects; //  | intersects_flipped;
+    }
 }
 
 [Differentiable]
@@ -106,14 +152,21 @@ public struct Gaussian3D : IDifferentiable {
         float2x2 inv_cov = inverse(float2x2(cov));
         // float2x2 inv_half_cov = inverse(float2x2(transformed_half_cov));
 
+        // float2 axes[3] = {
+        //     float2(transformed_half_cov[0][0], transformed_half_cov[1][0]),
+        //     float2(transformed_half_cov[0][1], transformed_half_cov[1][1]),
+        //     float2(transformed_half_cov[0][2], transformed_half_cov[1][2]),
+        // };
+        // int smallest = dot(axes[0], axes[0]) < dot(axes[1], axes[1]) ? 0 : 1;
+        // smallest = dot(axes[smallest], axes[smallest]) < dot(axes[2], axes[2]) ? smallest : 2;
+
         return Gaussian2D(
             ndc_position.xy,
             ndc_position.z,
             inv_cov,
             color,
             alpha,
-            float2(transformed_half_cov[0][0], transformed_half_cov[1][0]),
-            float2(transformed_half_cov[0][1], transformed_half_cov[1][1]),
+            float2x2(cov),
         );
     }
 }

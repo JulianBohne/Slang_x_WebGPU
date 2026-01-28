@@ -2,6 +2,39 @@
 const float_size = 4;
 const mat4_size = 4*4 * float_size;
 
+type MatrixValues = [
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number,
+];
+
+class Matrix {
+  values: MatrixValues; // TODO: Transpose this shait
+
+  constructor(values: MatrixValues) {
+    this.values = values;
+  }
+
+  static Identity(): Matrix {
+    return new Matrix([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+    ]);
+  }
+
+  // static RotationX(angle: number): Matrix {
+
+  //   return new Matrix([
+  //     1, 0, 0, 0,
+  //     0, 
+  //   ]);
+  // }
+
+}
+
 class SplatCamera {
 
   static size = mat4_size /* Model View */ + mat4_size /* Projection */;
@@ -14,6 +47,9 @@ class SplatCamera {
   aspect_ratio: number;
   far: number;
   near: number;
+
+  pitch: number;
+  yaw: number;
 
   x: number;
   y: number;
@@ -32,6 +68,9 @@ class SplatCamera {
     this.aspect_ratio = 1; // 1 : 1
     this.far = 1000;
     this.near = 1;
+
+    this.pitch = 0;
+    this.yaw = 0;
 
     this.x =  0;
     this.y =  0;
@@ -261,7 +300,7 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    const num_gaussians = 10;
+    const num_gaussians = 1;
 
     const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * num_gaussians);
     for (let i = 0; i < num_gaussians; ++i) {

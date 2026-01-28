@@ -34,24 +34,31 @@ void transform_gaussians(uint thread_index, uint num_threads, uint num_gaussians
     }
 }
 
-void collect_gaussians_in_tile(uint num_gaussians, uint3 groupThreadId, uint3 groupId) {
+void collect_gaussians_in_tile(uint num_gaussians, uint3 groupThreadId, float2 tile_ndc_min, float2 tile_ndc_max) {
     GroupMemoryBarrierWithGroupSync();
     if (groupThreadId.x == 0 && groupThreadId.y == 0) {
         atomic_num_gaussians_in_tile = 0;
     }
     GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
 
+    float2 quad_points[4] = {
+        tile_ndc_min,
+        float2(tile_ndc_min.x, tile_ndc_max.y),
+        tile_ndc_max,
+        float2(tile_ndc_max.x, tile_ndc_min.y),
+    };
+
     // TODO: Check if gaussian is in Tile
     // Currently we're just saying YES, for future reference, this is where we do wacky transformations with the axes :)
     for (uint j = groupThreadId.x + groupThreadId.y * TILE_SIZE; j < num_gaussians; j += MAX_GAUSSIANS_PER_TILE /* work group size */) {
-        if (gaussians_2d[j].depth >= 0 && gaussians_2d[j].depth <= 1) {
+        if (gaussians_2d[j].depth >= 0 && gaussians_2d[j].depth <= 1 && gaussians_2d[j].intersects_quad(quad_points)) {
             uint index = atomic_num_gaussians_in_tile++;
             if (index >= MAX_GAUSSIANS_PER_TILE) break;
             gaussians[index] = j;
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    if (groupThreadId.x == 0) {
+    if (groupThreadId.x == 0 && groupThreadId.y == 0) {
         num_gaussians_in_tile = min(min(atomic_num_gaussians_in_tile.load(), MAX_GAUSSIANS_PER_TILE), num_gaussians);
     }
     GroupMemoryBarrierWithGroupSync(); // Not sure if this second barrier is necessary? like, should this not run in lockstep?
@@ -76,7 +83,10 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     // NOTE: For now I will do the transformation here, but this couples the number of dispatched threads for transforming the gaussians to the resolution of the render, which is dumb lol
     transform_gaussians(global_thread_id, num_threads, num_total_gaussians);
 
-    collect_gaussians_in_tile(num_total_gaussians, groupThreadId, groupId);
+    float2 tile_uv_min = float2(groupId.xy * TILE_SIZE) / float2(output_width, output_height);
+    float2 tile_uv_max = min(float2((groupId.xy + 1) * TILE_SIZE) / float2(output_width, output_height), float2(1, 1));
+
+    collect_gaussians_in_tile(num_total_gaussians, groupThreadId, (tile_uv_min * 2 - 1) * float2(1, -1), (tile_uv_max * 2 - 1) * float2(1, -1));
     
     // TODO: Sort gaussians (we're just not gonna do that now)
 
@@ -84,7 +94,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
         return; // Outside of range
     }
 
-    float2 pixel_ndc = 2 * (float2(threadId.xy) / float2(output_width, output_height)) - 1;
+    float2 pixel_ndc = (2 * (float2(threadId.xy) / float2(output_width, output_height)) - 1) * float2(1, -1);
 
     float opacity = 0.0;
     float3 color = float3(0);
@@ -99,7 +109,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     }
 
     // output.Store(threadId.xy, float4(float3(gaussians_2d[0].inv_cov[0][0]), 1));
-    output.Store(threadId.xy, float4(color, 1));
+    output.Store(threadId.xy, float4(color + float3(num_gaussians_in_tile) / 2, 1));
 }
 
 uniform float w7h;

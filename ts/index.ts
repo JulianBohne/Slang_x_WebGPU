@@ -4,10 +4,26 @@ import { Splatter } from './renderer.js';
 
 (async () => {
   const canvas = document.getElementById('surface') as HTMLCanvasElement;
+
+  canvas.onclick = () => {
+    canvas.requestPointerLock();
+  };
+
+
   const gui_container = document.getElementById('gui-container') as HTMLDivElement;
 
   const splatter = await Splatter.new(canvas);
   
+  const degreesPerPixel = 1;
+  canvas.onmousemove = e => {
+    if (document.pointerLockElement == canvas) {
+      const deltaYaw = e.movementX * degreesPerPixel * (Math.PI / 180);
+      const deltaPitch = e.movementY * degreesPerPixel * (Math.PI / 180);
+      splatter.camera.yaw += deltaYaw;
+      splatter.camera.pitch += deltaPitch;
+    }
+  };
+
   new Slider(gui_container, splatter.camera, 'fov', 0.1, 0.9*Math.PI, () => {});
   new Slider(gui_container, splatter.camera, 'far', 1, 100, () => {});
   new Slider(gui_container, splatter.camera, 'near', 0.1, 10, () => {});
