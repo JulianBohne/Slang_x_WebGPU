@@ -58,28 +58,16 @@ public struct Gaussian2D : IDifferentiable {
     public float3 color;
     public float alpha;
 
-    public float2x2 cov;
+    public float2x2 circle_transformation;
 
     // Intersection test between the 2D gaussian and a convex quadrilateral (TODO: CC wise?)
     public bool intersects_quad(float2 quad_points[4]) {
-        float n_sigmas = 2;
-
-        // R * R^T = M
-
-        float2x2 half_cov_t = eigen(cov);
-
-        float2 axis_a = half_cov_t[0] * n_sigmas;
-        float2 axis_b = half_cov_t[1] * n_sigmas;
-
-        float2 inverse_axis_a = axis_a / dot(axis_a, axis_a);
-        float2 inverse_axis_b = axis_b / dot(axis_b, axis_b);
-        float2x2 transformation = float2x2(inverse_axis_a, inverse_axis_b);
 
         float2 transformed_quad_points[4];
         float2 center = float2(0, 0);
-        // [unroll]
+        [unroll]
         for (int i = 0; i < 4; ++i) {
-            transformed_quad_points[i] = mul(transformation, quad_points[i] - position);
+            transformed_quad_points[i] = mul(circle_transformation, quad_points[i] - position);
             center += transformed_quad_points[i];
         }
         center /= 4;
@@ -89,13 +77,13 @@ public struct Gaussian2D : IDifferentiable {
         float2 testPoint = center / length(center);
 
         float2 normals[4];
-        // [unroll]
+        [unroll]
         for (int i = 0; i < 4; ++i) {
             normals[i] = normalize(rot_90(transformed_quad_points[(i + 1) % 4] - transformed_quad_points[i]));
         }
         bool intersects = true;
         bool intersects_flipped = true;
-        // [unroll]
+        [unroll]
         for (int i = 0; i < 4; ++i) {
             intersects &= dot(testPoint - transformed_quad_points[i], normals[i]) < 1;
             intersects_flipped &= dot(testPoint - transformed_quad_points[i], -normals[i]) < 1;
@@ -158,15 +146,18 @@ public struct Gaussian3D : IDifferentiable {
         float3x3 transformed_half_cov = mul(jacobian, mul(float3x3(cam.mv), half_cov));
         float3x3 cov = mul(transformed_half_cov, transpose(transformed_half_cov));
         float2x2 inv_cov = inverse(float2x2(cov));
-        // float2x2 inv_half_cov = inverse(float2x2(transformed_half_cov));
 
-        // float2 axes[3] = {
-        //     float2(transformed_half_cov[0][0], transformed_half_cov[1][0]),
-        //     float2(transformed_half_cov[0][1], transformed_half_cov[1][1]),
-        //     float2(transformed_half_cov[0][2], transformed_half_cov[1][2]),
-        // };
-        // int smallest = dot(axes[0], axes[0]) < dot(axes[1], axes[1]) ? 0 : 1;
-        // smallest = dot(axes[smallest], axes[smallest]) < dot(axes[2], axes[2]) ? smallest : 2;
+        // Precalculations for intersection test
+        float n_sigmas = 2;
+
+        float2x2 half_cov_t = no_diff eigen(float2x2(cov));
+
+        float2 axis_a = half_cov_t[0] * n_sigmas;
+        float2 axis_b = half_cov_t[1] * n_sigmas;
+
+        float2 inverse_axis_a = axis_a / dot(axis_a, axis_a);
+        float2 inverse_axis_b = axis_b / dot(axis_b, axis_b);
+        float2x2 circle_transformation = float2x2(inverse_axis_a, inverse_axis_b);
 
         return Gaussian2D(
             ndc_position.xy,
@@ -174,7 +165,7 @@ public struct Gaussian3D : IDifferentiable {
             inv_cov,
             color,
             alpha,
-            float2x2(cov),
+            circle_transformation,
         );
     }
 }

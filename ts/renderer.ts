@@ -143,9 +143,11 @@ class Gaussian3D {
     const color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
     const alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
 
-    position_buffer.set([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]);
+    const spread = 1;
+
+    position_buffer.set([(Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread]);
     rotation_buffer.set(angleAxisToQuat([Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]));
-    scale_buffer.set([Math.random(), Math.random(), Math.random()]);
+    scale_buffer.set([Math.random()*1, Math.random()*1, Math.random()*1]);
     color_buffer.set([Math.random(), Math.random(), Math.random()]);
     alpha_buffer.set([1]); // Full opacity
   }

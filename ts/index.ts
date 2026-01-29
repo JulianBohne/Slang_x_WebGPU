@@ -27,9 +27,9 @@ import { Splatter } from './renderer.js';
   new Slider(gui_container, splatter.camera, 'fov', 0.1, 0.9*Math.PI, () => {});
   new Slider(gui_container, splatter.camera, 'far', 1, 100, () => {});
   new Slider(gui_container, splatter.camera, 'near', 0.1, 10, () => {});
-  new Slider(gui_container, splatter.camera, 'x', -5, 5, () => {});
-  new Slider(gui_container, splatter.camera, 'y', -5, 5, () => {});
-  new Slider(gui_container, splatter.camera, 'z', -5, 5, () => {});
+  new Slider(gui_container, splatter.camera, 'x', -10, 10, () => {});
+  new Slider(gui_container, splatter.camera, 'y', -10, 10, () => {});
+  new Slider(gui_container, splatter.camera, 'z', -10, 10, () => {});
 
   const animationFunc = (time: DOMHighResTimeStamp) => {
     splatter.render(time);

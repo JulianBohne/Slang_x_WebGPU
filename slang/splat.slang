@@ -1,7 +1,7 @@
 import gaussian;
 
 static const uint SENTINAL = -1; // 0xffffffff;
-static const uint MAX_GAUSSIANS_PER_TILE = 256;
+static const uint MAX_GAUSSIANS_PER_TILE = 256*4;
 static const uint TILE_SIZE = 16;
 
 [[vk::binding(0, 0)]]
@@ -109,7 +109,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     }
 
     // output.Store(threadId.xy, float4(float3(gaussians_2d[0].inv_cov[0][0]), 1));
-    output.Store(threadId.xy, float4(color, 1));
+    output.Store(threadId.xy, num_gaussians_in_tile == MAX_GAUSSIANS_PER_TILE ? float4(1, 0, 1, 1) : float4(color, 1));
 }
 
 uniform float w7h;
