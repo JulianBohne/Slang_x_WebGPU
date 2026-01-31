@@ -372,7 +372,7 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    this.num_gaussians = 50000;
+    this.num_gaussians = 100000;
 
     const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * this.num_gaussians);
     for (let i = 0; i < this.num_gaussians; ++i) {
@@ -436,7 +436,6 @@ export class Splatter {
       bit_count: 32,                      // Number of bits per element. Must be a multiple of 4 (default: 32)
       workgroup_size: { x: 64, y: 1 },   // Workgroup size in x and y dimensions. (x * y) must be a power of two
     });
-    console.log(this.radix_sort_kernel)
 
     // this.sampler = device.createSampler({
     //   label: 'Sampler',

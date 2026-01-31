@@ -1,7 +1,7 @@
 import gaussian;
 
 static const uint SENTINAL = -1; // 0xffffffff;
-static const uint MAX_GAUSSIANS_PER_TILE = 1024;
+static const uint MAX_GAUSSIANS_PER_TILE = 256;
 static const uint TILE_SIZE = 16;
 
 [[vk::binding(0, 0)]]
@@ -36,6 +36,8 @@ groupshared Atomic<uint> atomic_num_gaussians_in_tile;
 groupshared uint num_gaussians_in_tile;
 
 groupshared uint gaussians[MAX_GAUSSIANS_PER_TILE];
+
+groupshared Gaussian2D group_sorted_gaussians[MAX_GAUSSIANS_PER_TILE];
 
 void collect_gaussians_in_tile(uint num_gaussians, uint groupThreadIndex, float2 tile_ndc_min, float2 tile_ndc_max) {
     GroupMemoryBarrierWithGroupSync();
@@ -131,7 +133,7 @@ void transform_gaussians(uint3 threadId: SV_DispatchThreadID) {
     if (global_thread_id < num_total_gaussians) {
         gaussians_2d[global_thread_id] = gaussians_3d[global_thread_id].transform(camera);
 
-        float base_depth = gaussians_2d[global_thread_id].depth + (gaussians_2d[global_thread_id].intersects_quad(full_ndc) ? 0.0 : 0.0);
+        float base_depth = gaussians_2d[global_thread_id].depth + (gaussians_2d[global_thread_id].intersects_quad(full_ndc) ? 0.0 : 1000.0); // Add big distance if gaussian is outside of view frustum
         gaussian_depths[global_thread_id] = base_depth; // Just this is fine, because negative floats will be sorted to the high values (we don't want to render them anyays)
         sorted_indices[global_thread_id] = global_thread_id;
     }
@@ -146,6 +148,14 @@ void apply_sorted_indices(uint3 threadId: SV_DispatchThreadID) {
     if (threadId.x < num_total_gaussians) {
         sorted_gaussians_2d[threadId.x] = gaussians_2d[sorted_indices[threadId.x]];
     }
+}
+
+void copy_gaussians_to_group_shared(uint groupThreadIndex) {
+    for (uint i = groupThreadIndex; i < num_gaussians_in_tile; i += TILE_SIZE * TILE_SIZE) {
+        uint index = gaussians[i];
+        group_sorted_gaussians[i] = sorted_gaussians_2d[index];
+    }
+    GroupMemoryBarrierWithGroupSync();
 }
 
 [shader("compute")]
@@ -173,6 +183,8 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     
     sort_gaussians_in_tile(groupThreadIndex);
 
+    copy_gaussians_to_group_shared(groupThreadIndex);
+
     if (!all(threadId.xy < uint2(output_width, output_height))) {
         return; // Outside of range
     }
@@ -183,14 +195,12 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     float3 color = float3(0);
     [MaxIters(MAX_GAUSSIANS_PER_TILE)]
     for (uint i = 0; i < num_gaussians_in_tile; ++i) {
-        uint index = gaussians[i];
-        float density = gaussianPDF(pixel_ndc, sorted_gaussians_2d[index].position, sorted_gaussians_2d[index].inv_cov);
-        float current_alpha = sorted_gaussians_2d[index].alpha * density;
-        color = color + (1 - opacity) * sorted_gaussians_2d[index].color * current_alpha;
+        float density = gaussianPDF(pixel_ndc, group_sorted_gaussians[i].position, group_sorted_gaussians[i].inv_cov);
+        float current_alpha = group_sorted_gaussians[i].alpha * density;
+        color = color + (1 - opacity) * group_sorted_gaussians[i].color * current_alpha;
         opacity = opacity + (1 - opacity) * current_alpha;
         if (opacity > 0.99) break;
     }
 
-    // output.Store(threadId.xy, float4(float3(gaussians_2d[0].inv_cov[0][0]), 1));
-    output.Store(threadId.xy, num_gaussians_in_tile == MAX_GAUSSIANS_PER_TILE ? lerp(float4(color, 1), float4(1, 0, 1, 1), 0.5) : float4(color, 1));
+    output.Store(threadId.xy, float4(color, 1));
 }
