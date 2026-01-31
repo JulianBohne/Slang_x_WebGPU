@@ -5,6 +5,8 @@ const float_size = 4;
 const uint_size = 4;
 const mat4_size = 4*4 * float_size;
 
+const tile_size = 16;
+
 type MatrixValues = [
   number, number, number, number,
   number, number, number, number,
@@ -207,47 +209,47 @@ export class Splatter {
           binding: 4,
           resource: this.gaussian_index_buffer,
         },
-        // {
-        //   binding: 5,
-        //   resource: this.render_texture,
-        // },
       ]
     }));
     compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
 
     this.radix_sort_kernel.dispatch(compute_pass);
 
-    compute_pass.setPipeline(this.render_pipeline);
+    compute_pass.setPipeline(this.apply_sorted_indices_pipeline);
     compute_pass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.render_pipeline.getBindGroupLayout(0),
+      layout: this.apply_sorted_indices_pipeline.getBindGroupLayout(0),
       entries: [
-        // {
-        //   binding: 0,
-        //   resource: this.camera,
-        // },
-        // {
-        //   binding: 1,
-        //   resource: this.splat_buffer_3D,
-        // },
         {
           binding: 2,
           resource: this.splat_buffer_2D,
         },
-        // {
-        //   binding: 3,
-        //   resource: this.gaussian_depth_buffer,
-        // },
         {
           binding: 4,
           resource: this.gaussian_index_buffer,
         },
         {
           binding: 5,
+          resource: this.sorted_splat_buffer_2D,
+        },
+      ]
+    }));
+    compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
+
+    compute_pass.setPipeline(this.render_pipeline);
+    compute_pass.setBindGroup(0, this.device.createBindGroup({
+      layout: this.render_pipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 5,
+          resource: this.sorted_splat_buffer_2D,
+        },
+        {
+          binding: 6,
           resource: this.render_texture,
         },
       ],
     }));
-    compute_pass.dispatchWorkgroups(Math.floor((800 - 1) / 16) + 1, Math.floor((600 - 1) / 16) + 1, 1);
+    compute_pass.dispatchWorkgroups(Math.floor((800 - 1) / tile_size) + 1, Math.floor((600 - 1) / tile_size) + 1, 1);
     compute_pass.end();
     const compute_command_buffer = compute_encoder.finish();
     this.device.queue.submit([compute_command_buffer]);
@@ -267,10 +269,6 @@ export class Splatter {
           binding: 0,
           resource: this.render_texture,
         },
-        // {
-        //   binding: 1,
-        //   resource: this.sampler,
-        // },
       ],
     }));
     pass.draw(6); // Full screen quad
@@ -284,12 +282,14 @@ export class Splatter {
   device: GPUDevice;
   num_gaussians: number;
   transform_pipeline: GPUComputePipeline;
+  apply_sorted_indices_pipeline: GPUComputePipeline;
   radix_sort_kernel: any;
   render_pipeline: GPUComputePipeline;
   presentation_pipeline: GPURenderPipeline;
   camera: SplatCamera;
   splat_buffer_3D: GPUBuffer;
   splat_buffer_2D: GPUBuffer;
+  sorted_splat_buffer_2D: GPUBuffer;
   gaussian_depth_buffer: GPUBuffer;
   gaussian_index_buffer: GPUBuffer;
   render_texture: GPUTexture;
@@ -340,6 +340,15 @@ export class Splatter {
       },
     });
 
+    this.apply_sorted_indices_pipeline = device.createComputePipeline({
+      label: 'Copmute Apply Sorting To 2D Gaussians Pipelone',
+      layout: 'auto',
+      compute: {
+        module: module_splat,
+        entryPoint: 'apply_sorted_indices',
+      }
+    });
+
     this.render_pipeline = device.createComputePipeline({
       label: 'Compute Splatting Pipeline',
       layout: 'auto',
@@ -363,7 +372,7 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    this.num_gaussians = 10000;
+    this.num_gaussians = 50000;
 
     const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * this.num_gaussians);
     for (let i = 0; i < this.num_gaussians; ++i) {
@@ -389,6 +398,12 @@ export class Splatter {
     const gaussian2D_size = 4 * (2 + 1 + 1 /* padding */ + 2*2 + 3 + 1 + 2 + 2);
 
     this.splat_buffer_2D = device.createBuffer({
+      label: '2D Transformed Splat Buffer',
+      size: gaussian2D_size * this.num_gaussians,
+      usage: GPUBufferUsage.STORAGE,
+    });
+
+    this.sorted_splat_buffer_2D = device.createBuffer({
       label: '2D Transformed Splat Buffer',
       size: gaussian2D_size * this.num_gaussians,
       usage: GPUBufferUsage.STORAGE,

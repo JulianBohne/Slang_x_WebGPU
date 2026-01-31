@@ -1,7 +1,7 @@
 import gaussian;
 
 static const uint SENTINAL = -1; // 0xffffffff;
-static const uint MAX_GAUSSIANS_PER_TILE = 256*8;
+static const uint MAX_GAUSSIANS_PER_TILE = 1024;
 static const uint TILE_SIZE = 16;
 
 [[vk::binding(0, 0)]]
@@ -20,6 +20,9 @@ RWStructuredBuffer<float> gaussian_depths;
 RWStructuredBuffer<uint> sorted_indices;
 
 [[vk::binding(5, 0)]]
+RWStructuredBuffer<Gaussian2D> sorted_gaussians_2d;
+
+[[vk::binding(6, 0)]]
 WTexture2D output;
 
 // // WGSL doen't really support atomics for much, so we gotta bitcast to uints :D
@@ -50,11 +53,10 @@ void collect_gaussians_in_tile(uint num_gaussians, uint groupThreadIndex, float2
 
     // TODO: Better gaussian in tile check :)
     for (uint j = groupThreadIndex; j < num_gaussians; j += TILE_SIZE * TILE_SIZE /* work group size */) {
-        uint i = sorted_indices[j];
-        if (gaussians_2d[i].depth >= 0 && gaussians_2d[i].depth <= 1 && gaussians_2d[i].intersects_quad(quad_points)) {
+        if (sorted_gaussians_2d[j].depth >= 0 && sorted_gaussians_2d[j].depth <= 1 && sorted_gaussians_2d[j].intersects_quad(quad_points)) {
             uint index = atomic_num_gaussians_in_tile++;
             if (index >= MAX_GAUSSIANS_PER_TILE) break;
-            gaussians[index] = j; // Index in sorted index buffer
+            gaussians[index] = j; // Index in sorted gaussians buffer
         }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -107,14 +109,6 @@ void sort_gaussians_in_tile(uint groupThreadIndex) {
     }
 }
 
-void translate_indices(uint groupThreadIndex) {
-    GroupMemoryBarrierWithGroupSync();
-    for (uint i = groupThreadIndex; i < num_gaussians_in_tile; i += TILE_SIZE * TILE_SIZE) {
-        gaussians[i] = sorted_indices[gaussians[i]];
-    }
-    GroupMemoryBarrierWithGroupSync();
-}
-
 float sigmoid(float x) {
     return 1.0 / (1 + exp(-x));
 }
@@ -127,11 +121,30 @@ void transform_gaussians(uint3 threadId: SV_DispatchThreadID) {
     uint num_total_gaussians, gaussian_size;
     gaussians_3d.GetDimensions(num_total_gaussians, gaussian_size);
 
+    float2 full_ndc[4] = {
+        float2(-1, -1),
+        float2(-1,  1),
+        float2( 1,  1),
+        float2( 1, -1),
+    };
+
     if (global_thread_id < num_total_gaussians) {
         gaussians_2d[global_thread_id] = gaussians_3d[global_thread_id].transform(camera);
-        float base_depth = gaussians_2d[global_thread_id].depth;
-        gaussian_depths[global_thread_id] = sigmoid(base_depth);
+
+        float base_depth = gaussians_2d[global_thread_id].depth + (gaussians_2d[global_thread_id].intersects_quad(full_ndc) ? 0.0 : 0.0);
+        gaussian_depths[global_thread_id] = base_depth; // Just this is fine, because negative floats will be sorted to the high values (we don't want to render them anyays)
         sorted_indices[global_thread_id] = global_thread_id;
+    }
+}
+
+[shader("compute")]
+[NumThreads(256, 1, 1)]
+void apply_sorted_indices(uint3 threadId: SV_DispatchThreadID) {
+    uint num_total_gaussians, gaussian_size;
+    gaussians_2d.GetDimensions(num_total_gaussians, gaussian_size);
+
+    if (threadId.x < num_total_gaussians) {
+        sorted_gaussians_2d[threadId.x] = gaussians_2d[sorted_indices[threadId.x]];
     }
 }
 
@@ -143,7 +156,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     output.GetDimensions(output_width, output_height);
 
     uint num_total_gaussians, gaussian_2d_size;
-    gaussians_2d.GetDimensions(num_total_gaussians, gaussian_2d_size);
+    sorted_gaussians_2d.GetDimensions(num_total_gaussians, gaussian_2d_size);
 
     uint tiles_count_x = ((output_width - 1) / TILE_SIZE) + 1;
     uint tiles_count_y = ((output_width - 1) / TILE_SIZE) + 1;
@@ -160,8 +173,6 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     
     sort_gaussians_in_tile(groupThreadIndex);
 
-    translate_indices(groupThreadIndex);
-
     if (!all(threadId.xy < uint2(output_width, output_height))) {
         return; // Outside of range
     }
@@ -173,10 +184,10 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     [MaxIters(MAX_GAUSSIANS_PER_TILE)]
     for (uint i = 0; i < num_gaussians_in_tile; ++i) {
         uint index = gaussians[i];
-        float density = gaussianPDF(pixel_ndc, gaussians_2d[index].position, gaussians_2d[index].inv_cov);
-        float t = (1 - opacity) * gaussians_2d[index].alpha * density;
-        color = lerp(color, gaussians_2d[index].color, t);
-        opacity = lerp(opacity, 1, t);
+        float density = gaussianPDF(pixel_ndc, sorted_gaussians_2d[index].position, sorted_gaussians_2d[index].inv_cov);
+        float current_alpha = sorted_gaussians_2d[index].alpha * density;
+        color = color + (1 - opacity) * sorted_gaussians_2d[index].color * current_alpha;
+        opacity = opacity + (1 - opacity) * current_alpha;
         if (opacity > 0.99) break;
     }
 
