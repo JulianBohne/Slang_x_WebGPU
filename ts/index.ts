@@ -31,8 +31,27 @@ import { Splatter } from './renderer.js';
   new Slider(gui_container, splatter.camera, 'y', -10, 10, () => {});
   new Slider(gui_container, splatter.camera, 'z', -10, 10, () => {});
 
-  const animationFunc = (time: DOMHighResTimeStamp) => {
+  const animationFunc = async (time: DOMHighResTimeStamp) => {
     splatter.render(time);
+    // const buf = splatter.device.createBuffer({
+    //   size: splatter.splat_buffer_2D.size,
+    //   usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    // });
+
+    // const enc = splatter.device.createCommandEncoder();
+    // enc.copyBufferToBuffer(splatter.splat_buffer_2D, buf);
+    // const com = enc.finish();
+    // splatter.device.queue.submit([com]);
+
+    // await buf.mapAsync(GPUMapMode.READ);
+    // const cpuBuf = new Float32Array(buf.getMappedRange());
+    // const gaussian2D_float_size = (2 + 1 + 1 /* padding */ + 2*2 + 3 + 1 + 2 + 2);
+    // const depths = cpuBuf.filter((_, i) => (i % gaussian2D_float_size) == 2);
+    // const minDepth = depths.reduce((p, c) => Math.min(p, c), Number.POSITIVE_INFINITY);
+    // const maxDepth = depths.reduce((p, c) => Math.max(p, c), Number.NEGATIVE_INFINITY);
+    // const avgDepth = depths.reduce((p, c) => p + c, 0) / depths.length;
+    // console.log(minDepth, avgDepth, maxDepth);
+
     requestAnimationFrame(animationFunc);
   };
   requestAnimationFrame(animationFunc);

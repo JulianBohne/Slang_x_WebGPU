@@ -1,5 +1,8 @@
+declare var RadixSort: any;
+const { RadixSortKernel } = RadixSort;
 
 const float_size = 4;
+const uint_size = 4;
 const mat4_size = 4*4 * float_size;
 
 type MatrixValues = [
@@ -143,11 +146,12 @@ class Gaussian3D {
     const color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
     const alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
 
-    const spread = 1;
+    const spread = 10;
+    const scale = 0.1;
 
     position_buffer.set([(Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread]);
     rotation_buffer.set(angleAxisToQuat([Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]));
-    scale_buffer.set([Math.random()*1, Math.random()*1, Math.random()*1]);
+    scale_buffer.set([Math.random()*scale, Math.random()*scale, Math.random()*scale]);
     color_buffer.set([Math.random(), Math.random(), Math.random()]);
     alpha_buffer.set([1]); // Full opacity
   }
@@ -160,16 +164,16 @@ export class Splatter {
   static async new(target_canvas: HTMLCanvasElement): Promise<Splatter> {
     if (!('gpu' in navigator)) throw new Error('WebGPU not supported');
 
-    const vertex_shader_source_promise = fetch('/wgsl/compiled-splat-vertex.wgsl').then(res => res.text());
-    const fragment_shader_source_promise = fetch('/wgsl/compiled-splat-fragment.wgsl').then(res => res.text());
-    const render_shader_source_promise = fetch('/wgsl/compiled-splat-render.wgsl').then(res => res.text());
+    const vertex_shader_source_promise = fetch('/wgsl/compiled-present-vertex.wgsl').then(res => res.text());
+    const fragment_shader_source_promise = fetch('/wgsl/compiled-present-fragment.wgsl').then(res => res.text());
+    const splat_shader_source_promise = fetch('/wgsl/compiled-splat.wgsl').then(res => res.text());
 
     const adapter = await navigator.gpu.requestAdapter({ featureLevel: 'core' });
     if (!adapter) throw new Error('WebGPU not supported');
 
     const device = await adapter!.requestDevice();
 
-    const shader_sources = await Promise.all([vertex_shader_source_promise, fragment_shader_source_promise, render_shader_source_promise]);
+    const shader_sources = await Promise.all([vertex_shader_source_promise, fragment_shader_source_promise, splat_shader_source_promise]);
 
     return new Splatter(target_canvas, device, shader_sources)
   }
@@ -179,9 +183,9 @@ export class Splatter {
 
     const compute_encoder = this.device.createCommandEncoder({ label: 'Splatting Compute Encoder' });
     const compute_pass = compute_encoder.beginComputePass({ label: 'Compute Pass' });
-    compute_pass.setPipeline(this.render_pipeline);
+    compute_pass.setPipeline(this.transform_pipeline);
     compute_pass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.render_pipeline.getBindGroupLayout(0),
+      layout: this.transform_pipeline.getBindGroupLayout(0),
       entries: [
         {
           binding: 0,
@@ -197,6 +201,48 @@ export class Splatter {
         },
         {
           binding: 3,
+          resource: this.gaussian_depth_buffer,
+        },
+        {
+          binding: 4,
+          resource: this.gaussian_index_buffer,
+        },
+        // {
+        //   binding: 5,
+        //   resource: this.render_texture,
+        // },
+      ]
+    }));
+    compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
+
+    this.radix_sort_kernel.dispatch(compute_pass);
+
+    compute_pass.setPipeline(this.render_pipeline);
+    compute_pass.setBindGroup(0, this.device.createBindGroup({
+      layout: this.render_pipeline.getBindGroupLayout(0),
+      entries: [
+        // {
+        //   binding: 0,
+        //   resource: this.camera,
+        // },
+        // {
+        //   binding: 1,
+        //   resource: this.splat_buffer_3D,
+        // },
+        {
+          binding: 2,
+          resource: this.splat_buffer_2D,
+        },
+        // {
+        //   binding: 3,
+        //   resource: this.gaussian_depth_buffer,
+        // },
+        {
+          binding: 4,
+          resource: this.gaussian_index_buffer,
+        },
+        {
+          binding: 5,
           resource: this.render_texture,
         },
       ],
@@ -236,11 +282,16 @@ export class Splatter {
 
   canvas: HTMLCanvasElement;
   device: GPUDevice;
+  num_gaussians: number;
+  transform_pipeline: GPUComputePipeline;
+  radix_sort_kernel: any;
   render_pipeline: GPUComputePipeline;
   presentation_pipeline: GPURenderPipeline;
   camera: SplatCamera;
   splat_buffer_3D: GPUBuffer;
   splat_buffer_2D: GPUBuffer;
+  gaussian_depth_buffer: GPUBuffer;
+  gaussian_index_buffer: GPUBuffer;
   render_texture: GPUTexture;
   // sampler: GPUSampler;
   next_render_pass_descriptor: () => GPURenderPassDescriptor;
@@ -250,7 +301,7 @@ export class Splatter {
   private constructor(
     target_canvas: HTMLCanvasElement,
     device: GPUDevice,
-    [vertex_shader_source, fragment_shader_source, render_shader_source]: [string, string, string],
+    [vertex_shader_source, fragment_shader_source, splat_shader_source]: [string, string, string],
   ) {
     this.canvas = target_canvas;
     this.device = device;
@@ -275,16 +326,26 @@ export class Splatter {
       code: fragment_shader_source,
     });
 
-    const module_render = device.createShaderModule({
+    const module_splat = device.createShaderModule({
       label: 'Compute Splatting Module',
-      code: render_shader_source,
+      code: splat_shader_source,
+    });
+
+    this.transform_pipeline = device.createComputePipeline({
+      label: 'Compute Transform Pipeline',
+      layout: 'auto',
+      compute: {
+        module: module_splat,
+        entryPoint: 'transform_gaussians',
+      },
     });
 
     this.render_pipeline = device.createComputePipeline({
       label: 'Compute Splatting Pipeline',
       layout: 'auto',
       compute: {
-        module: module_render,
+        module: module_splat,
+        entryPoint: 'render',
       },
     });
 
@@ -302,16 +363,16 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    const num_gaussians = 1;
+    this.num_gaussians = 10000;
 
-    const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * num_gaussians);
-    for (let i = 0; i < num_gaussians; ++i) {
+    const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * this.num_gaussians);
+    for (let i = 0; i < this.num_gaussians; ++i) {
       new Gaussian3D(cpu_splat_buffer, i);
     }
 
     this.splat_buffer_3D = device.createBuffer({
       label: '3D Splat Buffer',
-      size: Gaussian3D.size * num_gaussians,
+      size: Gaussian3D.size * this.num_gaussians,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
     device.queue.writeBuffer(this.splat_buffer_3D, 0, cpu_splat_buffer);
@@ -329,7 +390,19 @@ export class Splatter {
 
     this.splat_buffer_2D = device.createBuffer({
       label: '2D Transformed Splat Buffer',
-      size: gaussian2D_size * num_gaussians,
+      size: gaussian2D_size * this.num_gaussians,
+      usage: GPUBufferUsage.STORAGE,
+    });
+
+    this.gaussian_depth_buffer = device.createBuffer({
+      label: 'Transformed Splat Depth Buffer',
+      size: float_size * this.num_gaussians,
+      usage: GPUBufferUsage.STORAGE,
+    });
+
+    this.gaussian_index_buffer = device.createBuffer({
+      label: 'Sorted Splat Index Buffer',
+      size: uint_size * this.num_gaussians,
       usage: GPUBufferUsage.STORAGE,
     });
 
@@ -338,6 +411,17 @@ export class Splatter {
       size: [ 800, 600 ],
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING, // We will render into this texture and then display it in the fragment shader :)
     });
+
+    this.radix_sort_kernel = new RadixSortKernel({
+      device: device,                     // GPUDevice to use
+      keys: this.gaussian_depth_buffer,   // GPUBuffer containing the keys to sort
+      values: this.gaussian_index_buffer, // (optional) GPUBuffer containing the associated values
+      count: this.num_gaussians,          // Number of elements to sort
+      check_order: false,                 // Whether to check if the input is already sorted to exit early
+      bit_count: 32,                      // Number of bits per element. Must be a multiple of 4 (default: 32)
+      workgroup_size: { x: 64, y: 1 },   // Workgroup size in x and y dimensions. (x * y) must be a power of two
+    });
+    console.log(this.radix_sort_kernel)
 
     // this.sampler = device.createSampler({
     //   label: 'Sampler',

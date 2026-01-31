@@ -26,6 +26,7 @@ public struct SplatCamera {
 
 }
 
+[ForceInline]
 float trace(float2x2 mat) {
     return mat[0][0] + mat[1][1];
 }
@@ -46,6 +47,7 @@ float2x2 eigen(float2x2 mat) {
 }
 
 // Rotate vec by 90 degrees
+[ForceInline]
 float2 rot_90(float2 vec) {
     return float2(-vec.y, vec.x);
 }
@@ -72,23 +74,35 @@ public struct Gaussian2D : IDifferentiable {
         }
         center /= 4;
 
-        if (length(center) <= 1) return true;
-
         float2 testPoint = center / length(center);
+        // return length(testPoint) < 1;
 
         float2 normals[4];
-        [unroll]
-        for (int i = 0; i < 4; ++i) {
-            normals[i] = normalize(rot_90(transformed_quad_points[(i + 1) % 4] - transformed_quad_points[i]));
-        }
-        bool intersects = true;
-        bool intersects_flipped = true;
-        [unroll]
-        for (int i = 0; i < 4; ++i) {
-            intersects &= dot(testPoint - transformed_quad_points[i], normals[i]) < 1;
-            intersects_flipped &= dot(testPoint - transformed_quad_points[i], -normals[i]) < 1;
-        }
-        return intersects | intersects_flipped;
+        normals[0] = normalize(rot_90(transformed_quad_points[(0 + 1) % 4] - transformed_quad_points[0]));
+        normals[1] = normalize(rot_90(transformed_quad_points[(1 + 1) % 4] - transformed_quad_points[1]));
+        normals[2] = normalize(rot_90(transformed_quad_points[(2 + 1) % 4] - transformed_quad_points[2]));
+        normals[3] = normalize(rot_90(transformed_quad_points[(3 + 1) % 4] - transformed_quad_points[3]));
+        // [unroll]
+        // for (int i = 0; i < 4; ++i) {
+        //     normals[i] = normalize(rot_90(transformed_quad_points[(i + 1) % 4] - transformed_quad_points[i]));
+        // }
+        bool intersects = dot(testPoint - transformed_quad_points[0], normals[0]) < 1
+            && dot(testPoint - transformed_quad_points[1], normals[1]) < 1
+            && dot(testPoint - transformed_quad_points[2], normals[2]) < 1
+            && dot(testPoint - transformed_quad_points[3], normals[3]) < 1;
+
+        bool intersects_flipped = dot(testPoint - transformed_quad_points[0], -normals[0]) < 1
+            && dot(testPoint - transformed_quad_points[1], -normals[1]) < 1
+            && dot(testPoint - transformed_quad_points[2], -normals[2]) < 1
+            && dot(testPoint - transformed_quad_points[3], -normals[3]) < 1;
+        // intersects         &= dot(testPoint - transformed_quad_points[0], normals[0]) < 1;
+        // intersects_flipped &= dot(testPoint - transformed_quad_points[0], -normals[0]) < 1;
+        // [unroll]
+        // for (int i = 0; i < 4; ++i) {
+        //     intersects &= dot(testPoint - transformed_quad_points[i], normals[i]) < 1;
+        //     intersects_flipped &= dot(testPoint - transformed_quad_points[i], -normals[i]) < 1;
+        // }
+        return intersects || intersects_flipped;
     }
 }
 
@@ -140,9 +154,12 @@ public struct Gaussian3D : IDifferentiable {
         float4 ndc_position = projected_position / projected_position.w;
 
         float3x3 jacobian = cam.jacobian(cam_space_position);
+
         float3x3 rotation_mat = quat_to_mat(rotation);
         float3x3 scale_mat = scale_mat(scale);
+
         float3x3 half_cov = mul(rotation_mat, scale_mat);
+        
         float3x3 transformed_half_cov = mul(jacobian, mul(float3x3(cam.mv), half_cov));
         float3x3 cov = mul(transformed_half_cov, transpose(transformed_half_cov));
         float2x2 inv_cov = inverse(float2x2(cov));
