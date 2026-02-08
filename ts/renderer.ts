@@ -1,5 +1,5 @@
-declare var RadixSort: any;
-const { RadixSortKernel } = RadixSort;
+// declare var RadixSort: any;
+// const { RadixSortKernel } = RadixSort;
 
 const float_size = 4;
 const uint_size = 4;
@@ -34,7 +34,7 @@ class Matrix {
 
   //   return new Matrix([
   //     1, 0, 0, 0,
-  //     0, 
+  //     0,
   //   ]);
   // }
 
@@ -70,7 +70,7 @@ class SplatCamera {
     this.device = device;
 
     this.fov = Math.PI / 2; // 90 degrees
-    this.aspect_ratio = 1; // 1 : 1
+    this.aspect_ratio = 800 / 600;
     this.far = 1000;
     this.near = 1;
 
@@ -94,7 +94,7 @@ class SplatCamera {
       0, 0,  1, 0,
       -this.x, -this.y, -this.z, 1,
     ]);
-    
+
     const tf = Math.tan(this.fov / 2);
 
     const a = this.aspect_ratio;
@@ -108,7 +108,7 @@ class SplatCamera {
                  0,      0,        f / (f - n), 1,
                  0,      0, -(f * n) / (f - n), 0,
     ], 4*4);
-    
+
     this.device.queue.writeBuffer(this.buffer, 0, cb); // Write camera to GPU
   }
 }
@@ -118,6 +118,19 @@ function angleAxisToQuat([x, y, z]: [number, number, number]) {
   const s = Math.sin(angle);
   const c = Math.cos(angle);
   return [s*x/angle, s*y/angle, s*z/angle, c];
+}
+
+function eulerToQuat([a, b, c]: [number, number, number]) {
+  const sx = Math.sin(a/2), cx = Math.cos(a/2);
+  const sy = Math.sin(b/2), cy = Math.cos(b/2);
+  const sz = Math.sin(c/2), cz = Math.cos(c/2);
+
+  const x = sx * cy * cz - cx * sy * sz;
+  const y = cx * sy * cz + sx * cy * sz;
+  const z = cx * cy * sz - sx * sy * cz;
+  const w = cx * cy * cz + sx * sy * sz;
+
+  return [x, y, z, w];
 }
 
 class Gaussian3D {
@@ -137,33 +150,50 @@ class Gaussian3D {
   static alpha_offset = Gaussian3D.color_offset + 3 * 4;
 
   static size = Gaussian3D.alpha_offset + 1 * 4;
-  
+
+  position_buffer: Float32Array;
+  rotation_buffer: Float32Array;
+  scale_buffer: Float32Array;
+  color_buffer: Float32Array;
+  alpha_buffer: Float32Array;
+
+  position: [number, number, number];
+  scale: [number, number, number];
+  rotation: [number, number, number]; // Euler angles for demo
+  color: [number, number, number]; // RGB
+  alpha: number;
+
   constructor(cpu_buffer: ArrayBuffer, index: number) {
 
     const offset = index * Gaussian3D.size;
 
-    const position_buffer = new Float32Array(cpu_buffer, offset + Gaussian3D.position_offset, 3);
-    const rotation_buffer = new Float32Array(cpu_buffer, offset + Gaussian3D.rotation_offset, 4);
-    const scale_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.scale_offset,    3);
-    const color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
-    const alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
+    this.position_buffer = new Float32Array(cpu_buffer, offset + Gaussian3D.position_offset, 3);
+    this.rotation_buffer = new Float32Array(cpu_buffer, offset + Gaussian3D.rotation_offset, 4);
+    this.scale_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.scale_offset,    3);
+    this.color_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.color_offset,    3);
+    this.alpha_buffer    = new Float32Array(cpu_buffer, offset + Gaussian3D.alpha_offset,    1);
 
-    const spread = 10;
-    const scale = 0.1;
+    this.position = [0, 0, 0];
+    this.scale = [1, 1, 1];
+    this.rotation = [0, 0, 0];
+    this.color = [0.5, 0.5, 0.5];
+    this.alpha = 1;
 
-    position_buffer.set([(Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread]);
-    rotation_buffer.set(angleAxisToQuat([Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]));
-    scale_buffer.set([Math.random()*scale, Math.random()*scale, Math.random()*scale]);
-    color_buffer.set([Math.random(), Math.random(), Math.random()]);
-    alpha_buffer.set([1]); // Full opacity
+    this.update();
+  }
+
+  update() {
+    this.position_buffer.set(this.position);
+    this.rotation_buffer.set(eulerToQuat(this.rotation));
+    this.scale_buffer.set(this.scale);
+    this.color_buffer.set(this.color);
+    this.alpha_buffer.set([this.alpha]);
   }
 }
 
-let counter = 0;
-
 export class Splatter {
 
-  static async new(target_canvas: HTMLCanvasElement): Promise<Splatter> {
+  static async new(target_canvas: HTMLCanvasElement, num_gaussians: number = 10000): Promise<Splatter> {
     if (!('gpu' in navigator)) throw new Error('WebGPU not supported');
 
     const vertex_shader_source_promise = fetch('/wgsl/compiled-present-vertex.wgsl').then(res => res.text());
@@ -177,7 +207,7 @@ export class Splatter {
 
     const shader_sources = await Promise.all([vertex_shader_source_promise, fragment_shader_source_promise, splat_shader_source_promise]);
 
-    return new Splatter(target_canvas, device, shader_sources)
+    return new Splatter(target_canvas, device, shader_sources, num_gaussians)
   }
 
   render(current_time: DOMHighResTimeStamp) {
@@ -213,35 +243,35 @@ export class Splatter {
     }));
     compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
 
-    this.radix_sort_kernel.dispatch(compute_pass);
+    // this.radix_sort_kernel.dispatch(compute_pass);
 
-    compute_pass.setPipeline(this.apply_sorted_indices_pipeline);
-    compute_pass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.apply_sorted_indices_pipeline.getBindGroupLayout(0),
-      entries: [
-        {
-          binding: 2,
-          resource: this.splat_buffer_2D,
-        },
-        {
-          binding: 4,
-          resource: this.gaussian_index_buffer,
-        },
-        {
-          binding: 5,
-          resource: this.sorted_splat_buffer_2D,
-        },
-      ]
-    }));
-    compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
+    // compute_pass.setPipeline(this.apply_sorted_indices_pipeline);
+    // compute_pass.setBindGroup(0, this.device.createBindGroup({
+    //   layout: this.apply_sorted_indices_pipeline.getBindGroupLayout(0),
+    //   entries: [
+    //     {
+    //       binding: 2,
+    //       resource: this.splat_buffer_2D,
+    //     },
+    //     {
+    //       binding: 4,
+    //       resource: this.gaussian_index_buffer,
+    //     },
+    //     {
+    //       binding: 5,
+    //       resource: this.sorted_splat_buffer_2D,
+    //     },
+    //   ]
+    // }));
+    // compute_pass.dispatchWorkgroups(Math.floor((this.num_gaussians - 1) / 256) + 1, 1, 1);
 
     compute_pass.setPipeline(this.render_pipeline);
     compute_pass.setBindGroup(0, this.device.createBindGroup({
       layout: this.render_pipeline.getBindGroupLayout(0),
       entries: [
         {
-          binding: 5,
-          resource: this.sorted_splat_buffer_2D,
+          binding: 2,
+          resource: this.splat_buffer_2D,
         },
         {
           binding: 6,
@@ -278,6 +308,10 @@ export class Splatter {
     this.device.queue.submit([command_buffer]);
   }
 
+  update_gaussians_from_cpu() {
+    this.device.queue.writeBuffer(this.splat_buffer_3D, 0, this.cpu_splat_buffer);
+  }
+
   canvas: HTMLCanvasElement;
   device: GPUDevice;
   num_gaussians: number;
@@ -287,6 +321,8 @@ export class Splatter {
   render_pipeline: GPUComputePipeline;
   presentation_pipeline: GPURenderPipeline;
   camera: SplatCamera;
+  cpu_splat_buffer: ArrayBuffer;
+  gaussians: Gaussian3D[];
   splat_buffer_3D: GPUBuffer;
   splat_buffer_2D: GPUBuffer;
   sorted_splat_buffer_2D: GPUBuffer;
@@ -302,6 +338,7 @@ export class Splatter {
     target_canvas: HTMLCanvasElement,
     device: GPUDevice,
     [vertex_shader_source, fragment_shader_source, splat_shader_source]: [string, string, string],
+    num_gaussians: number,
   ) {
     this.canvas = target_canvas;
     this.device = device;
@@ -372,11 +409,12 @@ export class Splatter {
 
     this.camera = new SplatCamera(device);
 
-    this.num_gaussians = 100000;
+    this.num_gaussians = num_gaussians;
 
-    const cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * this.num_gaussians);
+    this.cpu_splat_buffer = new ArrayBuffer(Gaussian3D.size * this.num_gaussians);
+    this.gaussians = [];
     for (let i = 0; i < this.num_gaussians; ++i) {
-      new Gaussian3D(cpu_splat_buffer, i);
+      this.gaussians.push(new Gaussian3D(this.cpu_splat_buffer, i));
     }
 
     this.splat_buffer_3D = device.createBuffer({
@@ -384,7 +422,7 @@ export class Splatter {
       size: Gaussian3D.size * this.num_gaussians,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
-    device.queue.writeBuffer(this.splat_buffer_3D, 0, cpu_splat_buffer);
+    device.queue.writeBuffer(this.splat_buffer_3D, 0, this.cpu_splat_buffer);
 
     // public float2 position;
     // public no_diff float depth;
@@ -427,15 +465,15 @@ export class Splatter {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING, // We will render into this texture and then display it in the fragment shader :)
     });
 
-    this.radix_sort_kernel = new RadixSortKernel({
-      device: device,                     // GPUDevice to use
-      keys: this.gaussian_depth_buffer,   // GPUBuffer containing the keys to sort
-      values: this.gaussian_index_buffer, // (optional) GPUBuffer containing the associated values
-      count: this.num_gaussians,          // Number of elements to sort
-      check_order: false,                 // Whether to check if the input is already sorted to exit early
-      bit_count: 32,                      // Number of bits per element. Must be a multiple of 4 (default: 32)
-      workgroup_size: { x: 64, y: 1 },   // Workgroup size in x and y dimensions. (x * y) must be a power of two
-    });
+    // this.radix_sort_kernel = new RadixSortKernel({
+    //   device: device,                     // GPUDevice to use
+    //   keys: this.gaussian_depth_buffer,   // GPUBuffer containing the keys to sort
+    //   values: this.gaussian_index_buffer, // (optional) GPUBuffer containing the associated values
+    //   count: this.num_gaussians,          // Number of elements to sort
+    //   check_order: false,                 // Whether to check if the input is already sorted to exit early
+    //   bit_count: 32,                      // Number of bits per element. Must be a multiple of 4 (default: 32)
+    //   workgroup_size: { x: 64, y: 1 },   // Workgroup size in x and y dimensions. (x * y) must be a power of two
+    // });
 
     // this.sampler = device.createSampler({
     //   label: 'Sampler',

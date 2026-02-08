@@ -166,7 +166,7 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     output.GetDimensions(output_width, output_height);
 
     uint num_total_gaussians, gaussian_2d_size;
-    sorted_gaussians_2d.GetDimensions(num_total_gaussians, gaussian_2d_size);
+    gaussians_2d.GetDimensions(num_total_gaussians, gaussian_2d_size);
 
     uint tiles_count_x = ((output_width - 1) / TILE_SIZE) + 1;
     uint tiles_count_y = ((output_width - 1) / TILE_SIZE) + 1;
@@ -179,11 +179,11 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
 
     uint groupThreadIndex = groupThreadId.x + groupThreadId.y * TILE_SIZE;
 
-    collect_gaussians_in_tile(num_total_gaussians, groupThreadIndex, (tile_uv_min * 2 - 1) * float2(1, -1), (tile_uv_max * 2 - 1) * float2(1, -1));
-    
-    sort_gaussians_in_tile(groupThreadIndex);
+    // collect_gaussians_in_tile(num_total_gaussians, groupThreadIndex, (tile_uv_min * 2 - 1) * float2(1, -1), (tile_uv_max * 2 - 1) * float2(1, -1));
 
-    copy_gaussians_to_group_shared(groupThreadIndex);
+    // sort_gaussians_in_tile(groupThreadIndex);
+
+    // copy_gaussians_to_group_shared(groupThreadIndex);
 
     if (!all(threadId.xy < uint2(output_width, output_height))) {
         return; // Outside of range
@@ -194,10 +194,11 @@ void render(uint3 threadId: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupTh
     float opacity = 0.0;
     float3 color = float3(0);
     [MaxIters(MAX_GAUSSIANS_PER_TILE)]
-    for (uint i = 0; i < num_gaussians_in_tile; ++i) {
-        float density = gaussianPDF(pixel_ndc, group_sorted_gaussians[i].position, group_sorted_gaussians[i].inv_cov);
-        float current_alpha = group_sorted_gaussians[i].alpha * density;
-        color = color + (1 - opacity) * group_sorted_gaussians[i].color * current_alpha;
+    for (uint i = 0; i < num_total_gaussians; ++i) {
+        if (gaussians_2d[i].depth < 0 || gaussians_2d[i].depth > 1) continue;
+        float density = gaussianPDF(pixel_ndc, gaussians_2d[i].position, gaussians_2d[i].inv_cov);
+        float current_alpha = gaussians_2d[i].alpha * density;
+        color = color + (1 - opacity) * gaussians_2d[i].color * current_alpha;
         opacity = opacity + (1 - opacity) * current_alpha;
         if (opacity > 0.99) break;
     }

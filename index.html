@@ -6,9 +6,24 @@
     <title>Hello Slang!</title>
     <script src="node_modules/webgpu-radix-sort/dist/umd/radix-sort-umd.js"></script>
     <script type="module" src="./js/index.js" defer></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            color: white;
+        }
+        #gui-container {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            padding: 1em;
+        }
+        #gui-container span {
+            margin-top: 1em;
+        }
+    </style>
 </head>
 <body>
     <canvas id="surface" width="1920" height="1920" style="position: absolute; top: 0; left: 0; width: 100dvw; height: 100dvh;"></canvas>
-    <div id="gui-container" style="position: absolute;"></div>
+    <div id="gui-container"></div>
 </body>
 </html>
